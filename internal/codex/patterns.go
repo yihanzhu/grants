@@ -3,6 +3,8 @@ package codex
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/yihanzhu/grants/internal/risk"
 )
 
 // maxExpansions caps how many concrete prefixes one pattern may expand to. Real
@@ -65,8 +67,26 @@ func DisplayToken(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// expand lists every concrete token sequence a pattern accepts. It returns nil when
-// the pattern is empty or has more than maxExpansions sequences.
+// normTokens is the form in which prefix tokens are cached and compared: each token
+// is redacted, and a value that follows a flag such as --token is redacted too.
+func normTokens(p []string) []string {
+	out := make([]string, len(p))
+	for i, t := range p {
+		out[i] = risk.Redact(t)
+		if i > 0 && out[i] == t {
+			// A flag and its value can arrive as separate tokens.
+			j := risk.Redact(p[i-1] + " " + t)
+			if !strings.HasSuffix(j, " "+t) {
+				out[i] = j[strings.LastIndexByte(j, ' ')+1:]
+			}
+		}
+	}
+	return out
+}
+
+// expand lists every concrete token sequence a pattern accepts, in the redacted form
+// of normTokens, so it compares with cached snapshots. It returns nil when the
+// pattern is empty or has more than maxExpansions sequences.
 func expand(p [][]string) [][]string {
 	if len(p) == 0 {
 		return nil
@@ -87,21 +107,10 @@ func expand(p [][]string) [][]string {
 		}
 		combos = next
 	}
+	for i, c := range combos {
+		combos[i] = normTokens(c)
+	}
 	return combos
 }
 
 func samePattern(a, b [][]string) bool { return PatternJSON(a) == PatternJSON(b) }
-
-// under reports whether path is dir or a folder inside dir.
-func under(path, dir string) bool {
-	if dir == "" || path == "" {
-		return false
-	}
-	if path == dir {
-		return true
-	}
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
-	}
-	return strings.HasPrefix(path, dir)
-}

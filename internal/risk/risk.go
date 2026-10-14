@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
 	"github.com/yihanzhu/grants/internal/model"
 )
@@ -82,7 +83,7 @@ func assessTrust(g *model.Grant, env model.Env, exists func(string) bool, v *ver
 	case g.Value == "":
 		v.add(model.RiskLow, "no folder recorded")
 		return false
-	case dir == "/" || (home != "" && within(home, dir)):
+	case dir == "/" || (home != "" && fsx.Within(home, dir)):
 		// the folder is the root, the home folder, or a folder that holds the home folder
 		v.add(model.RiskHigh, "trusts a very broad folder")
 	case home != "" && isBroadHomeFolder(dir, home):
@@ -118,12 +119,6 @@ func configFile(agent model.Agent, dir string, exists func(string) bool) string 
 		}
 	}
 	return ""
-}
-
-// within reports whether p is dir or inside it.
-func within(p, dir string) bool {
-	p, dir = filepath.Clean(p), filepath.Clean(dir)
-	return p == dir || dir == "/" || strings.HasPrefix(p, dir+"/")
 }
 
 // assessCodex classifies every expansion of a prefix_rule pattern.

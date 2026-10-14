@@ -21,7 +21,7 @@ func TestExists(t *testing.T) {
 	}
 }
 
-func TestExistsAndReadableBlocked(t *testing.T) {
+func TestExistsCountsPermissionErrorAsExisting(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores modes")
 	}
@@ -31,28 +31,9 @@ func TestExistsAndReadableBlocked(t *testing.T) {
 	os.WriteFile(filepath.Join(locked, "f"), nil, 0o600)
 	os.Chmod(locked, 0)
 	t.Cleanup(func() { os.Chmod(locked, 0o700) })
-	if Readable(locked) || !Blocked(locked) {
-		t.Errorf("locked: readable=%v blocked=%v", Readable(locked), Blocked(locked))
-	}
 	// A path below a closed folder cannot be inspected, but it may exist.
 	if !Exists(filepath.Join(locked, "f")) {
 		t.Error("permission error must count as existing")
-	}
-}
-
-func TestReadable(t *testing.T) {
-	d := t.TempDir()
-	if !Readable(d) || Blocked(d) {
-		t.Error("empty folder should be readable")
-	}
-	missing := filepath.Join(d, "missing")
-	if Readable(missing) || Blocked(missing) {
-		t.Error("missing folder is neither readable nor blocked")
-	}
-	f := filepath.Join(d, "file")
-	os.WriteFile(f, nil, 0o600)
-	if Readable(f) {
-		t.Error("a file is not a readable folder")
 	}
 }
 

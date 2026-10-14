@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
 	"github.com/yihanzhu/grants/internal/model"
 )
@@ -150,7 +151,7 @@ func assessPath(g *model.Grant, env model.Env, exists func(string) bool, spec st
 // inProject reports whether abs lies inside the grant's project folder.
 func inProject(g *model.Grant, abs string, relative bool) bool {
 	if g.Project != "" {
-		return within(strings.TrimSuffix(abs, "/**"), g.Project)
+		return fsx.Within(strings.TrimSuffix(abs, "/**"), g.Project)
 	}
 	return relative
 }

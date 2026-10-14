@@ -24,6 +24,12 @@ type journalUndo struct {
 	Time time.Time `json:"time"`
 }
 
+// journalAbort marks a batch whose write failed and was rolled back.
+type journalAbort struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
 // journalRecord reads either kind of line.
 type journalRecord struct {
 	Type  string    `json:"type"`
@@ -64,7 +70,7 @@ func appendJournal(stateDir string, rec any) error {
 }
 
 // readJournal returns the apply batches in journal order and the undone IDs with the
-// time of the undo.
+// time of the undo. Batches that were aborted (rolled back) are left out.
 // Lines that do not parse (for example one cut short by a crash) are skipped.
 func readJournal(stateDir string) ([]Batch, map[string]time.Time, error) {
 	f, err := os.Open(journalPath(stateDir))
@@ -87,6 +93,14 @@ func readJournal(stateDir string) ([]Batch, map[string]time.Time, error) {
 				switch {
 				case rec.Type == "apply" && rec.Batch != nil && rec.Batch.ID != "":
 					batches = append(batches, *rec.Batch)
+				case rec.Type == "abort" && rec.ID != "":
+					// Drop the latest batch with this ID; an earlier one is a different run.
+					for i := len(batches) - 1; i >= 0; i-- {
+						if batches[i].ID == rec.ID {
+							batches = append(batches[:i], batches[i+1:]...)
+							break
+						}
+					}
 				case rec.Type == "undo" && rec.ID != "":
 					undone[rec.ID] = rec.Time
 				}

@@ -103,7 +103,7 @@ func TestSummary(t *testing.T) {
 		"Clean up",
 		"4 grants point to deleted paths: grants revoke --dead",
 		"2 one-off rules, approved for a single URL or script: grants revoke --one-off",
-		"2 grants not used in 90 days: grants revoke --unused",
+		"6 grants not used in 90 days: grants revoke --unused",
 		"Files are backed up first. Preview with --dry-run. Undo with grants undo.",
 		"History covers Claude Code from 2026-06-01 and Codex from 2026-06-01.",
 		"Next: grants show ",

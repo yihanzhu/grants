@@ -28,7 +28,10 @@ func TestCommandsEdgeCases(t *testing.T) {
 		{"unterminated single quote", `echo 'abc`, [][]string{{"echo", "abc"}}},
 		{"unterminated double quote", `echo "abc`, [][]string{{"echo", "abc"}}},
 		{"trailing backslash", `echo a\`, [][]string{{"echo", `a\`}}},
-		{"command substitution", "echo $(rm -rf x) done", [][]string{{"echo", "$", "done"}, {"rm", "-rf", "x"}}[0:0]},
+		{"command substitution", "echo $(rm -rf x) done", [][]string{{"rm", "-rf", "x"}, {"echo", "$(rm -rf x)", "done"}}},
+		{"substitution with suffix", "ls $(pwd)/x", [][]string{{"pwd"}, {"ls", "$(pwd)/x"}}},
+		{"substitution then flag", "ls $(pwd) -la", [][]string{{"pwd"}, {"ls", "$(pwd)", "-la"}}},
+		{"nested substitution", "echo $(a $(b) c) d", [][]string{{"b"}, {"a", "$(b)", "c"}, {"echo", "$(a $(b) c)", "d"}}},
 		{"backticks", "echo `rm -rf x` && ls", [][]string{{"echo"}, {"rm", "-rf", "x"}, {"ls"}}},
 		{"process substitution", "diff <(ls a) <(ls b)", [][]string{{"diff"}, {"ls", "a"}, {"ls", "b"}}},
 		{"output process substitution", "tee >(wc -l) < in", [][]string{{"tee"}, {"wc", "-l"}}},
@@ -65,19 +68,6 @@ func TestCommandsEdgeCases(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := Commands(c.in)
-		if c.name == "command substitution" {
-			// The inner command is found; the placeholder token left in the outer command is not important.
-			found := false
-			for _, cmd := range got {
-				if reflect.DeepEqual(cmd, []string{"rm", "-rf", "x"}) {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("%s: inner command missing in %q", c.name, got)
-			}
-			continue
-		}
 		if len(got) == 0 && len(c.want) == 0 {
 			continue
 		}

@@ -13,27 +13,6 @@ import (
 	"github.com/yihanzhu/grants/internal/timeline"
 )
 
-func TestInside(t *testing.T) {
-	cases := []struct {
-		p, dir string
-		want   bool
-	}{
-		{"/a/b", "/a/b", true},
-		{"/a/b/c", "/a/b", true},
-		{"/a/bc", "/a/b", false},
-		{"/a/b/", "/a/b", true},
-		{"/a", "/a/b", false},
-		{"/anything", "/", true},
-		{"", "/a", false},
-		{"/a", "", false},
-	}
-	for _, c := range cases {
-		if got := inside(c.p, c.dir); got != c.want {
-			t.Errorf("inside(%q, %q) = %v", c.p, c.dir, got)
-		}
-	}
-}
-
 func TestDateGrantKeepsOnlyTheCurrentStretch(t *testing.T) {
 	at := func(d int) time.Time { return time.Date(2026, 9, d, 12, 0, 0, 0, time.UTC) }
 	obs := func(d int, present bool) timeline.Obs { return timeline.Obs{T: at(d), Present: present, Source: "s"} }

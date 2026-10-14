@@ -26,9 +26,15 @@ type Batch struct {
 }
 
 type BatchFile struct {
-	File      string `json:"file"`
-	Backup    string `json:"backup"`     // copy of the file before the change
-	AfterHash string `json:"after_hash"` // sha256 of the content grants wrote
-	GrantID   string `json:"grant_id,omitempty"`
-	Summary   string `json:"summary,omitempty"`
+	File   string `json:"file"`
+	Backup string `json:"backup"` // copy of the file before the change
+	// BeforeHash is the sha256 of the original content. Undo refuses a backup that no
+	// longer matches it. Journals written before this field existed leave it empty.
+	BeforeHash string `json:"before_hash,omitempty"`
+	AfterHash  string `json:"after_hash"` // sha256 of the content grants wrote
+	GrantID    string `json:"grant_id,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	// Saved is set by a forced Undo: the path of a copy of the file as it was before
+	// the undo overwrote it. It is not written to the journal.
+	Saved string `json:"-"`
 }

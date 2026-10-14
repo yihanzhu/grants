@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/yihanzhu/grants/internal/model"
@@ -151,26 +150,4 @@ func (o *Observations) Obs(key string) []timeline.Obs {
 		obs = append(obs, timeline.Obs{T: next, Present: false, Source: Source})
 	}
 	return obs
-}
-
-// Missing returns grants seen on an earlier run that are not in active, sorted by
-// agent, kind and value.
-func (o *Observations) Missing(active map[string]bool) []*Seen {
-	var out []*Seen
-	for k, s := range o.Grants {
-		if !active[k] {
-			out = append(out, s)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.Agent != b.Agent {
-			return a.Agent < b.Agent
-		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		return a.Value < b.Value
-	})
-	return out
 }

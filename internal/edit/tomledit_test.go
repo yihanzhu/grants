@@ -215,6 +215,16 @@ func TestTOMLDeleteTable(t *testing.T) {
 			want: "[projects.\"/a\"]\ntrust_level = \"trusted\"\n",
 		},
 		{
+			name: "last table keeps trailing comments", table: p("/a"),
+			doc:  "[projects.\"/b\"]\nk = 1\n\n[projects.\"/a\"]\nk = 1\n\n# [mcp_servers.x]\n# command = \"npx\"\n",
+			want: "[projects.\"/b\"]\nk = 1\n\n# [mcp_servers.x]\n# command = \"npx\"\n",
+		},
+		{
+			name: "first table keeps the BOM", table: p("/a"),
+			doc:  "\xEF\xBB\xBF[projects.\"/a\"]\nk = 1\n\n[projects.\"/b\"]\nk = 1\n",
+			want: "\xEF\xBB\xBF[projects.\"/b\"]\nk = 1\n",
+		},
+		{
 			name: "no blank line before: keep one", table: p("/b"),
 			doc:  "[projects.\"/a\"]\ntrust_level = \"trusted\"\n[projects.\"/b\"]\ntrust_level = \"trusted\"\n\n[projects.\"/c\"]\ntrust_level = \"trusted\"\n",
 			want: "[projects.\"/a\"]\ntrust_level = \"trusted\"\n\n[projects.\"/c\"]\ntrust_level = \"trusted\"\n",

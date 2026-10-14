@@ -1,9 +1,11 @@
 package claude
 
 import (
+	"path/filepath"
 	"sort"
 	"time"
 
+	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/model"
 	"github.com/yihanzhu/grants/internal/timeline"
 )
@@ -58,11 +60,13 @@ func sortedObs(obs []timeline.Obs) []timeline.Obs {
 	return list
 }
 
-// earliestSession returns the earliest time any session shows a folder in use.
-func earliestSession(sessions []session, dir string) (time.Time, bool) {
+// earliestSession returns the earliest time any session shows a folder in use. A
+// session in a subfolder that is trusted on its own does not count: it shows that
+// subfolder in use, and trust in dir does not follow from it.
+func earliestSession(sessions []session, dir string, trusted map[string]bool) (time.Time, bool) {
 	var first time.Time
 	for _, s := range sessions {
-		if s.T.IsZero() || !inside(s.Dir, dir) {
+		if s.T.IsZero() || !fsx.Within(s.Dir, dir) || trustedBetween(s.Dir, dir, trusted) {
 			continue
 		}
 		if first.IsZero() || s.T.Before(first) {
@@ -70,6 +74,20 @@ func earliestSession(sessions []session, dir string) (time.Time, bool) {
 		}
 	}
 	return first, !first.IsZero()
+}
+
+// trustedBetween reports whether a trusted folder lies below dir and above or at p.
+func trustedBetween(p, dir string, trusted map[string]bool) bool {
+	dir = filepath.Clean(dir)
+	for q := filepath.Clean(p); q != dir; q = filepath.Dir(q) {
+		if trusted[q] {
+			return true
+		}
+		if q == filepath.Dir(q) {
+			break
+		}
+	}
+	return false
 }
 
 func modelWindow(o timeline.Obs) model.Window {

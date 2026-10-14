@@ -212,10 +212,10 @@ func renderPlan(w io.Writer, items []revoke.Item, changes []edit.Change, skipped
 			pad := strings.Repeat(" ", 2+width(it.Grant.ID)+2)
 			fmt.Fprintf(w, "%s%s\n", pad, st.dim(tilde(it.File, home)))
 			for _, d := range it.Diff {
-				fmt.Fprintf(w, "%s%s\n", pad, colorDiff(d, st))
+				fmt.Fprintf(w, "%s%s\n", pad, colorDiff(clean(d), st))
 			}
 			if it.Note != "" {
-				fmt.Fprintf(w, "%s%s\n", pad, it.Note)
+				fmt.Fprintf(w, "%s%s\n", pad, clean(it.Note))
 			}
 		}
 	} else {
@@ -256,7 +256,7 @@ func distinctNotes(items []revoke.Item) []string {
 	for _, it := range items {
 		if it.Note != "" && !seen[it.Note] {
 			seen[it.Note] = true
-			out = append(out, it.Note)
+			out = append(out, clean(it.Note))
 		}
 	}
 	return out

@@ -74,6 +74,18 @@ func Run(env model.Env, opt scan.Options) (Result, error) {
 	res := Result{Env: env}
 	res.Reports = collect(env, opt)
 
+	// Two grants processes must not lose each other's updates to seen.json. The lock
+	// covers only the fast load, merge and save; the scan above runs outside it.
+	unlock := func() {}
+	if err := os.MkdirAll(env.StateDir, 0o700); err == nil {
+		if u, err := fsx.Lock(filepath.Join(env.StateDir, "seen.lock")); err == nil {
+			unlock = u
+		} else {
+			res.Notes = append(res.Notes, model.Note{Level: "warn", Text: "Could not lock grants' own history: " + err.Error()})
+		}
+	}
+	defer unlock()
+
 	obs, err := store.Load(env.StateDir)
 	if err != nil {
 		res.Notes = append(res.Notes, model.Note{Level: "warn", Text: "Could not read grants' own history, so dates come from the agents only: " + err.Error()})
@@ -86,25 +98,33 @@ func Run(env model.Env, opt scan.Options) (Result, error) {
 	return res, nil
 }
 
-// collect runs both adapters at once. A crash in one becomes a note in its report.
+// adapters are the agents to scan. Tests replace the list to inject a crash.
+var adapters = []struct {
+	agent model.Agent
+	name  string
+	run   func(model.Env, scan.Options) model.Report
+}{
+	{model.ClaudeCode, "Claude Code", claude.Collect},
+	{model.Codex, "Codex", codex.Collect},
+}
+
+// collect runs both adapters at once. A crash in one becomes a note in its report,
+// and the whole agent counts as unread, so none of its earlier grants show as removed.
 func collect(env model.Env, opt scan.Options) []model.Report {
-	fns := []struct {
-		agent model.Agent
-		name  string
-		run   func(model.Env, scan.Options) model.Report
-	}{
-		{model.ClaudeCode, "Claude Code", claude.Collect},
-		{model.Codex, "Codex", codex.Collect},
-	}
-	reports := make([]model.Report, len(fns))
+	reports := make([]model.Report, len(adapters))
 	var wg sync.WaitGroup
-	for i, f := range fns {
+	for i, f := range adapters {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					reports[i] = model.Report{Agent: f.agent, Found: true, Notes: []model.Note{{Level: "warn", Text: fmt.Sprintf("%s scan stopped early: %v", f.name, r)}}}
+					reports[i] = model.Report{
+						Agent:  f.agent,
+						Found:  true,
+						Unread: []string{string(f.agent) + "|"},
+						Notes:  []model.Note{{Level: "warn", Text: fmt.Sprintf("%s scan stopped early: %v", f.name, r)}},
+					}
 				}
 			}()
 			reports[i] = f.run(env, opt)

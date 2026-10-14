@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -179,11 +180,24 @@ func TOMLDeleteTable(doc []byte, table []string) (out []byte, err error) {
 	from := stmts[h].start
 	var to int
 	if j == len(stmts) {
-		// Last table: delete to the end of the file and drop the blank lines before it.
+		// Last table: delete its body up to the last key/value. A comment block after
+		// that is not part of the table and stays. With nothing left after it, drop
+		// the blank lines before the header too.
+		r := j
+		for r-1 > h && (stmts[r-1].kind == tomlBlank || stmts[r-1].kind == tomlComment) {
+			r--
+		}
+		for r < j && stmts[r].kind == tomlBlank {
+			r++
+		}
 		to = len(doc)
-		for h > 0 && stmts[h-1].kind == tomlBlank {
-			h--
-			from = stmts[h].start
+		if r < j {
+			to = stmts[r].start
+		} else {
+			for h > 0 && stmts[h-1].kind == tomlBlank {
+				h--
+				from = stmts[h].start
+			}
 		}
 	} else {
 		// Comments directly above the next header belong to it. The blank lines before
@@ -198,6 +212,9 @@ func TOMLDeleteTable(doc []byte, table []string) (out []byte, err error) {
 			}
 		}
 		to = stmts[r].start
+	}
+	if from == 0 && bytes.HasPrefix(doc, bom) {
+		from = len(bom) // keep the byte order mark
 	}
 	out = append(append([]byte(nil), doc[:from]...), doc[to:]...)
 

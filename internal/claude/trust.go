@@ -53,7 +53,7 @@ func (c *collector) trustGrants() {
 	for _, p := range list {
 		active := c.cj.Projects[p].Trusted
 		var obs []timeline.Obs
-		if t, ok := earliestSession(sessions, p); ok {
+		if t, ok := earliestSession(sessions, p, dirs); ok {
 			obs = append(obs, timeline.Obs{T: t, Present: true, Approx: true, Source: srcFirstSeen})
 		}
 		for _, b := range backups {
@@ -75,12 +75,25 @@ func (c *collector) trustGrants() {
 			g.Location = model.Location{File: c.env.ClaudeJSON, Pointer: trustPointer(p), Line: c.trustLine(p)}
 			g.Revocable, g.RevokeNote = true, trustRevokeMsg
 		} else {
-			g.LastSeen = res.LastSeen
-			g.Status, g.Revocable, g.RevokeNote = model.StatusGone, false, "Already removed."
+			c.markAbsent(&g, res)
 		}
 		g.Usage = c.trustUsage(p, g.Granted.After)
 		c.rep.Grants = append(c.rep.Grants, g)
 	}
+}
+
+// markAbsent sets a grant that ~/.claude.json does not hold now. When grants could not
+// read that file, it says nothing about removal, so the grant is unknown and has no
+// removal window.
+func (c *collector) markAbsent(g *model.Grant, res timeline.Result) {
+	g.Revocable = false
+	g.LastSeen = res.LastSeen
+	if c.cjState == stateBlocked {
+		g.Status, g.RevokeNote = model.StatusUnknown, "File not readable."
+		return
+	}
+	g.Status, g.RevokeNote = model.StatusGone, "Already removed."
+	g.Removed = res.RemovedAt
 }
 
 func (c *collector) trustLine(project string) int {
@@ -158,8 +171,7 @@ func (c *collector) legacyGrants() {
 			}
 			g.Revocable, g.RevokeNote = true, "Claude Code applies it on the next tool call."
 		} else {
-			g.LastSeen = res.LastSeen
-			g.Status, g.RevokeNote = model.StatusGone, "Already removed."
+			c.markAbsent(&g, res)
 		}
 		c.rep.Grants = append(c.rep.Grants, g)
 	}

@@ -119,7 +119,7 @@ func (c *collector) addProjectFiles(dir string) {
 
 // fileFromPath builds a settingsFile for a path seen in history.
 func (c *collector) fileFromPath(p string) (*settingsFile, bool) {
-	if !isSettingsPath(p) {
+	if !filepath.IsAbs(p) || !isSettingsPath(p) {
 		return nil, false
 	}
 	p = filepath.Clean(p)

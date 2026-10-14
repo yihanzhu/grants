@@ -143,7 +143,7 @@ func summaryOf(grants ...model.Grant) string {
 	return sb.String()
 }
 
-func TestSummaryCleanUpCountsEachGrantOnce(t *testing.T) {
+func TestSummaryCleanUpCountsMatchWhatRevokeSelects(t *testing.T) {
 	out := summaryOf(
 		cleanGrant("dead1", model.FlagDeadPath, model.FlagOneOff, model.FlagUnused),
 		cleanGrant("dead2", model.FlagDeadPath),
@@ -155,8 +155,8 @@ func TestSummaryCleanUpCountsEachGrantOnce(t *testing.T) {
 	mustContain(t, out,
 		"Clean up",
 		"2 grants point to deleted paths: grants revoke --dead",
-		"1 one-off rule, approved for a single URL or script: grants revoke --one-off",
-		"3 grants not used in 90 days: grants revoke --unused",
+		"2 one-off rules, approved for a single URL or script: grants revoke --one-off",
+		"5 grants not used in 90 days: grants revoke --unused",
 		"Nothing needs a look.",
 	)
 	if n := strings.Count(out, "Files are backed up first."); n != 1 {

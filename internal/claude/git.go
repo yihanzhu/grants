@@ -24,14 +24,16 @@ func gitRoot(dir string) string {
 	}
 }
 
-// git runs one read-only git command in root. fsmonitor is switched off because it can
-// run a program named by the repository's own config.
+// git runs one read-only git command in root. The repository's own config must not run
+// anything: fsmonitor is switched off, and signature checks (log.showSignature) are
+// switched off because they run the program named by gpg.program. GIT_NO_LAZY_FETCH
+// stops a partial clone from fetching a missing blob over the network.
 func git(root string, args ...string) ([]byte, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
-	full := append([]string{"-C", root, "-c", "core.fsmonitor=false", "--no-optional-locks"}, args...)
+	full := append([]string{"-C", root, "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "--no-optional-locks"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -46,13 +48,33 @@ func gitTracked(root, rel string) bool {
 	return ok
 }
 
+// isPartialClone reports whether the repository has a promisor remote.
+func isPartialClone(root string) bool {
+	out, ok := git(root, "config", "--get-regexp", `^(extensions\.partialclone|remote\..*\.promisor)$`)
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasSuffix(line, " false") {
+			return true
+		}
+	}
+	return false
+}
+
 type gitVersion struct {
 	T    time.Time
 	Data []byte
 }
 
 // gitVersions returns up to 50 committed versions of the file at rel, newest first.
+//
+// A partial clone has no history: its old blobs may live on a remote, and reading them
+// could open a network connection.
 func gitVersions(root, rel string) []gitVersion {
+	if isPartialClone(root) {
+		return nil
+	}
 	out, ok := git(root, "log", "--format=%H%x00%aI", "-n", "50", "--", rel)
 	if !ok {
 		return nil

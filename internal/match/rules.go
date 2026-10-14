@@ -90,7 +90,7 @@ func bashRuleKeys(spec string) ([]Key, bool) {
 func pathRuleKeys(ns, spec string, base RuleBase) ([]Key, bool) {
 	dirGlob := false
 	if strings.HasSuffix(spec, "/**") {
-		spec, dirGlob = strings.TrimSuffix(spec, "/**"), true
+		spec, dirGlob = strings.TrimSuffix(spec, "**"), true // keep the slash, so "//**" and "/**" resolve right
 	} else if spec == "**" {
 		spec, dirGlob = ".", true
 	}
@@ -119,8 +119,12 @@ func ResolvePath(spec string, base RuleBase) string {
 	return filepath.Join(base.Project, spec)
 }
 
+// maxCombos caps how many alternatives CodexPatternKeys lists.
+const maxCombos = 64
+
 // CodexPatternKeys returns the prefix keys of a Codex prefix_rule pattern. Each
-// position lists its alternatives; most positions have exactly one.
+// position lists its alternatives; most positions have exactly one. It returns nil
+// when the pattern has more than 64 combinations.
 func CodexPatternKeys(pattern [][]string) []Key {
 	combos := [][]string{nil}
 	for _, alts := range pattern {
@@ -128,10 +132,10 @@ func CodexPatternKeys(pattern [][]string) []Key {
 		for _, c := range combos {
 			for _, a := range alts {
 				next = append(next, append(append([]string(nil), c...), a))
-				if len(next) > 64 {
-					break
-				}
 			}
+		}
+		if len(next) > maxCombos {
+			return nil // too many to list; callers report usage as unknown
 		}
 		combos = next
 	}

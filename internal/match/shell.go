@@ -131,6 +131,14 @@ func split(line string) [][]string {
 				i = skipHeredocs(rs, i+1, heredocs) - 1
 				heredocs = nil
 			}
+		case c == '$' && i+1 < len(rs) && rs[i+1] == '(': // $(cmd) stays in the word; its commands are listed too
+			end := closeParen(rs, i+1)
+			if i+2 < len(rs) && rs[i+2] != '(' { // not $(( arithmetic ))
+				cmds = append(cmds, split(string(rs[i+2:min(end, len(rs))]))...)
+			}
+			tok.WriteString(string(rs[i:min(end+1, len(rs))]))
+			inTok = true
+			i = end
 		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')' || c == '`':
 			if c == '&' && tok.Len() > 0 && strings.HasSuffix(tok.String(), ">") { // 2>&1, >&2
 				tok.WriteRune(c)
@@ -176,6 +184,34 @@ func split(line string) [][]string {
 	}
 	flushCmd()
 	return cmds
+}
+
+// closeParen returns the index of the ')' that closes the '(' at open, or len(rs).
+func closeParen(rs []rune, open int) int {
+	depth := 0
+	for j := open; j < len(rs); j++ {
+		switch rs[j] {
+		case '\\':
+			j++
+		case '\'':
+			for j++; j < len(rs) && rs[j] != '\''; j++ {
+			}
+		case '"':
+			for j++; j < len(rs) && rs[j] != '"'; j++ {
+				if rs[j] == '\\' {
+					j++
+				}
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return len(rs)
 }
 
 type heredoc struct {

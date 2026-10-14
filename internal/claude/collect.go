@@ -6,12 +6,13 @@ package claude
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/yihanzhu/grants/internal/match"
 	"github.com/yihanzhu/grants/internal/model"
-	"github.com/yihanzhu/grants/internal/risk"
 	"github.com/yihanzhu/grants/internal/scan"
 )
 
@@ -73,15 +74,23 @@ func (c *collector) readClaudeJSON() {
 	switch c.cjState {
 	case stateBlocked:
 		c.note("warn", "Could not read %s, so trust and legacy rules are missing.", c.env.ClaudeJSON)
+		c.unreadClaudeJSON()
 	case stateOK:
 		cj, err := parseClaudeJSON(c.cjDoc)
 		if err != nil {
 			c.note("warn", "Could not parse %s, so trust and legacy rules are missing.", c.env.ClaudeJSON)
 			c.cjState = stateBlocked
+			c.unreadClaudeJSON()
 			return
 		}
 		c.cj = cj
 	}
+}
+
+// unreadClaudeJSON tells the merge step that grants held in ~/.claude.json were not
+// seen this run, so earlier ones must not count as removed.
+func (c *collector) unreadClaudeJSON() {
+	c.rep.Unread = append(c.rep.Unread, "claude-code|trust|", "claude-code|rule|"+c.env.ClaudeJSON+"#")
 }
 
 func (c *collector) scanTranscripts() {
@@ -89,7 +98,7 @@ func (c *collector) scanTranscripts() {
 	histRoot := filepath.Join(c.env.ClaudeDir, "file-history")
 	files, skipped, _ := scan.Walk(root, func(p string) bool { return strings.HasSuffix(p, ".jsonl") })
 	if skipped > 0 {
-		c.note("warn", "%d transcript folders could not be read.", skipped)
+		c.note("warn", "%s could not be read.", model.Plural(skipped, "transcript folder", "transcript folders"))
 	}
 	var cache *scan.Cache
 	if !c.opt.NoCache && c.env.StateDir != "" {
@@ -108,7 +117,7 @@ func (c *collector) scanTranscripts() {
 		}
 	}
 	if st.Failed > 0 {
-		c.note("warn", "%d Claude Code transcripts could not be read.", st.Failed)
+		c.note("warn", "%s could not be read.", model.Plural(st.Failed, "Claude Code transcript", "Claude Code transcripts"))
 	}
 	c.facts = make(map[string]*TranscriptFacts, len(got))
 	var from, to time.Time
@@ -124,9 +133,39 @@ func (c *collector) scanTranscripts() {
 		}
 	}
 	sort.Strings(c.paths)
+	c.dedupeCalls()
 	c.oldest = from
 	if len(got) > 0 {
 		c.rep.Coverage = append(c.rep.Coverage, model.Coverage{Source: "Claude Code transcripts", Files: len(got), From: from, To: to})
+	}
+}
+
+// dedupeCalls rebuilds the usage of every transcript so that a tool call counts once.
+// A resumed or forked session copies the calls of its parent into a new transcript.
+// The oldest transcript owns a call, so the original session keeps it.
+func (c *collector) dedupeCalls() {
+	order := slices.Clone(c.paths)
+	sort.SliceStable(order, func(i, j int) bool {
+		return c.facts[order[i]].Start.Before(c.facts[order[j]].Start)
+	})
+	seen := map[uint64]struct{}{}
+	for _, p := range order {
+		f := c.facts[p]
+		f.Usage = map[match.Key]Use{}
+		for _, call := range f.Calls {
+			if call.ID != 0 {
+				if _, dup := seen[call.ID]; dup {
+					continue
+				}
+				seen[call.ID] = struct{}{}
+			}
+			for _, k := range call.Keys {
+				u := f.Usage[k]
+				u.Count++
+				u.Last = max(u.Last, call.Last)
+				f.Usage[k] = u
+			}
+		}
 	}
 }
 
@@ -156,33 +195,10 @@ func span(ss []session) (from, to time.Time) {
 	return from, to
 }
 
-// finish rates every grant, orders them, and adds the notes that need the whole picture.
+// finish adds the notes that need the whole picture. The merge step rates and orders the grants.
 func (c *collector) finish() {
-	exists := pathExists
-	for i := range c.rep.Grants {
-		g := &c.rep.Grants[i]
-		g.ID = model.MakeID(g.Key)
-		risk.Assess(g, c.env, exists)
-	}
-	rank := map[model.Status]int{model.StatusActive: 0, model.StatusUnknown: 1, model.StatusGone: 2}
-	sort.SliceStable(c.rep.Grants, func(i, j int) bool {
-		a, b := c.rep.Grants[i], c.rep.Grants[j]
-		if rank[a.Status] != rank[b.Status] {
-			return rank[a.Status] < rank[b.Status]
-		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		if a.Scope != b.Scope {
-			return a.Scope < b.Scope
-		}
-		if a.Project != b.Project {
-			return a.Project < b.Project
-		}
-		return a.Value < b.Value
-	})
 	if len(c.blocked) > 0 {
-		c.note("warn", "%d project folders could not be read (macOS privacy). Give your terminal Full Disk Access to include their settings.", len(c.blocked))
+		c.note("warn", "%s could not be read (macOS privacy). Give your terminal Full Disk Access to include their settings.", model.Plural(len(c.blocked), "project folder", "project folders"))
 	}
 	if !c.oldest.IsZero() && !c.cj.FirstStart.IsZero() && c.oldest.Sub(c.cj.FirstStart) > transcriptsOutlived {
 		c.note("info", "Claude Code keeps transcripts for cleanupPeriodDays (30 by default). Grants older than %s are dated from backups and first-session times.", c.oldest.Format("2006-01-02"))

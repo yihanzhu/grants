@@ -42,14 +42,14 @@ Needs a look
 Clean up
   4 grants point to deleted paths: grants revoke --dead
   2 one-off rules, approved for a single URL or script: grants revoke --one-off
-  2 grants not used in 90 days: grants revoke --unused
+  6 grants not used in 90 days: grants revoke --unused
   Files are backed up first. Preview with --dry-run. Undo with grants undo.
 
 History covers Claude Code from 2026-06-01 and Codex from 2026-06-01.
 Next: grants show f74bd7d · grants revoke f74bd7d · grants log
 ```
 
-"Needs a look" lists grants that are high risk or hold a credential. "Clean up" lists the bulk commands. Each grant is counted in the first list that fits.
+"Needs a look" lists grants that are high risk or hold a credential. "Clean up" lists the bulk commands. Each count is what that command would select, so a grant with two flags is in two counts.
 
 Look at one grant, preview its removal, then remove it:
 
@@ -87,13 +87,13 @@ Dry run. Nothing was changed.
 | `grants scan` | Read the history and show what it covers and how long it took |
 | `grants version` | Print the version |
 
-Every command also takes `--no-color`, `--unused <days>` (default 90) and `--no-cache`. With `revoke`, `--unused` also picks the grants that were not used for that long. Run `grants help <command>` for details. Exit codes: 0 success, 1 error, 2 usage error.
+Every command also takes `--no-color`, `--unused <days>` (default 90, at most 36500) and `--no-cache`. With `revoke`, `--unused` also picks the grants that were not used for that long. Run `grants help <command>` for details. Exit codes: 0 success, 1 error, 2 usage error.
 
 ## How it works
 
 - **Grants.** A grant is a rule (an allowed command or tool) or a trusted folder. Each one is `active`, `gone` (seen before, removed since) or `unknown` (the file that may hold it cannot be read).
 - **Dating.** Agents do not record when you approved something. grants rebuilds the date from the agent's own history: settings backups, session snapshots, first sessions in a folder and file times. It also keeps its own record from the first run on. A date can be a range or an estimate (`~`). When no history shows a lower bound, `grants log` lists the grant under "Dates unknown" with the day it was first seen.
-- **Usage.** grants matches each command and tool call in history against your rules. It stores hashed keys, not command text. A grant is flagged `unused` when history covers the whole window and nothing matched.
+- **Usage.** grants matches each command and tool call in history against your rules. It matches with hashed keys and does not keep your command history. A grant is flagged `unused` when history covers the whole window and nothing matched.
 - **Risk.** Each grant is `high`, `medium` or `low`, with reasons. A trusted folder that holds three or more projects is broad: high for Codex, medium for Claude Code. Flags: `dead-path`, `one-off`, `unused`, `secret`, `committed`.
 
 The full design is in [docs/design.md](docs/design.md).
@@ -104,7 +104,7 @@ The full design is in [docs/design.md](docs/design.md).
 - It is read-only. Only `revoke` and `undo` write, and `revoke` asks first (or use `--dry-run` to only look).
 - It edits only the bytes that hold the grant, then parses the file again to check the result.
 - It copies each file to its state folder before writing. `grants undo` restores it, and refuses if the file changed since (unless you use `--force`).
-- It does not store commands or conversation text. The saved state holds hashed keys and short evidence with credentials redacted.
+- It does not store conversation text. The saved state holds hashed usage keys, your rules, and short excerpts (at most 160 characters) of approved commands and agent justifications, with credentials redacted.
 - It never edits organization-managed settings.
 - State lives in `~/.local/state/grants` (override with `GRANTS_STATE_DIR`).
 - On macOS, some folders are protected by privacy controls. Give your terminal Full Disk Access to include them. Without it, grants shows what it could not read.

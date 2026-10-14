@@ -29,6 +29,8 @@ func TestClaudeBashLevels(t *testing.T) {
 		want model.Level
 	}{
 		{"Bash", model.RiskHigh},
+		{"Bash(cat $(git rev-parse --show-toplevel)/README.md)", model.RiskLow},
+		{"Bash(ls $(pwd) -la)", model.RiskLow},
 		{"Bash(*)", model.RiskHigh},
 		{"Bash()", model.RiskHigh},
 		{"Bash(bash -c:*)", model.RiskHigh},
@@ -339,6 +341,8 @@ func TestFlags(t *testing.T) {
 			existsOnly(), []model.Flag{model.FlagDeadPath}},
 		{"missing home program", claudeRule("Bash(~/bin/run.sh:*)", "/work/app", model.ScopeProject),
 			existsOnly(), []model.Flag{model.FlagDeadPath}},
+		{"command substitution is not a program", claudeRule("Bash(cat $(git rev-parse --show-toplevel)/README.md)", "/work/app", model.ScopeProject),
+			existsOnly(), nil},
 		{"existing program", claudeRule("Bash(/opt/tools/run.sh:*)", "/work/app", model.ScopeProject),
 			existsOnly("/opt/tools/run.sh"), nil},
 		{"program on PATH is not checked", claudeRule("Bash(git status)", "/work/app", model.ScopeProject),

@@ -3,6 +3,7 @@ package claude
 import (
 	"time"
 
+	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
 	"github.com/yihanzhu/grants/internal/model"
 )
@@ -61,7 +62,7 @@ func (c *collector) trustUsage(dir string, after time.Time) model.Usage {
 }
 
 func (c *collector) countable(f *TranscriptFacts, project string, after time.Time) bool {
-	if project != "" && !inside(f.Cwd, project) {
+	if project != "" && !fsx.Within(f.Cwd, project) {
 		return false
 	}
 	return after.IsZero() || !f.End.Before(after)

@@ -10,24 +10,6 @@ import (
 	"github.com/yihanzhu/grants/internal/risk"
 )
 
-// PlanRevoke returns the file edit that revokes g, without writing anything. A rule is
-// removed from its allow array, and a trusted folder is set to not trusted.
-func PlanRevoke(env model.Env, g model.Grant) ([]edit.Change, error) {
-	if err := checkRevocable(g); err != nil {
-		return nil, err
-	}
-	file := revokeFile(env, g)
-	before, err := readChecked(file)
-	if err != nil {
-		return nil, err
-	}
-	after, summary, err := RevokeDoc(env, g, before)
-	if err != nil {
-		return nil, fmt.Errorf("plan revoke of %s in %s: %w", g.ID, file, err)
-	}
-	return []edit.Change{{File: file, Before: before, After: after, GrantID: g.ID, Summary: summary}}, nil
-}
-
 // RevokeDoc applies the revoke of g to doc, the content of the file that holds it,
 // and returns the new content with a one-line summary. It lets a caller chain several
 // grants of one file on the same document.
@@ -81,15 +63,4 @@ func checkRevocable(g model.Grant) error {
 		return fmt.Errorf("grant %s is %s, so there is nothing to revoke", g.ID, g.Status)
 	}
 	return nil
-}
-
-func readChecked(path string) ([]byte, error) {
-	b, st := readFile(path)
-	switch st {
-	case stateOK:
-		return b, nil
-	case stateMissing:
-		return nil, fmt.Errorf("%s does not exist any more", path)
-	}
-	return nil, fmt.Errorf("cannot read %s", path)
 }

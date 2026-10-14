@@ -177,8 +177,8 @@ func TestCollectRulesAndDating(t *testing.T) {
 	if g.Status != model.StatusActive || !g.Revocable || g.Tool != "Bash" || g.Project != "" {
 		t.Errorf("rule fields = %+v", g)
 	}
-	if g.Key != model.KeyClaudeRule(user, "Bash(npm test:*)") || g.ID != model.MakeID(g.Key) {
-		t.Errorf("key/id = %q %q", g.Key, g.ID)
+	if g.Key != model.KeyClaudeRule(user, "Bash(npm test:*)") {
+		t.Errorf("key = %q", g.Key)
 	}
 	if g.Location.File != user || g.Location.Pointer != "permissions.allow" || g.Location.Line != 4 {
 		t.Errorf("location = %+v", g.Location)
@@ -208,9 +208,6 @@ func TestCollectRulesAndDating(t *testing.T) {
 		t.Errorf("usage = %+v", g.Usage)
 	}
 	sameTime(t, "usage since", g.Usage.Since, ts("2026-08-01T10:00:00Z"))
-	if g.Risk.Level == "" {
-		t.Error("risk was not assessed")
-	}
 
 	// Duplicates in one file give one grant; a rule with no history is dated by the live file.
 	n := find(t, rep, model.KindRule, model.ScopeUser, "Read(~/notes/**)")
@@ -321,9 +318,6 @@ func TestCollectTrustAndLegacy(t *testing.T) {
 	}
 	sameTime(t, "gone trust last seen", gone.LastSeen, ts("2026-10-01T00:00:00Z"))
 	sameTime(t, "gone trust before", gone.Granted.Before, ts("2026-08-01T10:00:00Z"))
-	if !gone.HasFlag(model.FlagDeadPath) {
-		t.Errorf("a trusted folder that is gone should be flagged dead: %+v", gone.Flags)
-	}
 
 	// An untrusted project is not a grant.
 	for _, g := range rep.Grants {

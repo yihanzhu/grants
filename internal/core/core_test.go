@@ -9,6 +9,7 @@ import (
 
 	"github.com/yihanzhu/grants/internal/claude"
 	"github.com/yihanzhu/grants/internal/codex"
+	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/model"
 	"github.com/yihanzhu/grants/internal/scan"
 	"github.com/yihanzhu/grants/internal/store"
@@ -508,5 +509,96 @@ func TestStoreHoldsNoCredential(t *testing.T) {
 	}
 	if !out[0].HasFlag(model.FlagSecret) {
 		t.Errorf("flags = %v", out[0].Flags)
+	}
+}
+
+func TestUnreadPrefixesAreNotReportedGone(t *testing.T) {
+	obs := &store.Observations{
+		Runs: []time.Time{day("2026-09-01"), day("2026-09-10")},
+		Grants: map[string]*store.Seen{
+			"claude-code|trust|/work/x":       {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"claude-code|rule|f|Bash(ls:*)":   {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(ls:*)", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"claude-code|rule|g.json#Bash(a)": {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(a)", First: day("2026-09-01"), Last: day("2026-09-01")},
+		},
+	}
+	e := env()
+	e.Now = day("2026-09-10")
+	reports := []model.Report{{
+		Agent: model.ClaudeCode, Found: true,
+		Unread: []string{"claude-code|trust|", "claude-code|rule|g.json#"},
+	}}
+	out := merge(e, reports, obs)
+	// Only the rule from a file that was read counts as removed.
+	if len(out) != 1 || out[0].Value != "Bash(ls:*)" || out[0].Status != model.StatusGone {
+		t.Fatalf("grants = %+v, want only the rule from the readable file as gone", out)
+	}
+}
+
+func TestCollectRecoversAdapterPanic(t *testing.T) {
+	old := adapters
+	t.Cleanup(func() { adapters = old })
+	adapters = []struct {
+		agent model.Agent
+		name  string
+		run   func(model.Env, scan.Options) model.Report
+	}{{model.ClaudeCode, "Claude Code", func(model.Env, scan.Options) model.Report { panic("boom") }}}
+
+	reports := collect(env(), scan.Options{})
+	if len(reports) != 1 || len(reports[0].Notes) != 1 || reports[0].Notes[0].Level != "warn" {
+		t.Fatalf("reports = %+v", reports)
+	}
+	obs := &store.Observations{
+		Runs: []time.Time{day("2026-09-01")},
+		Grants: map[string]*store.Seen{
+			"claude-code|trust|/work/x": {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", First: day("2026-09-01"), Last: day("2026-09-01")},
+		},
+	}
+	e := env()
+	e.Now = day("2026-09-10")
+	if out := merge(e, reports, obs); len(out) != 0 {
+		t.Errorf("a crashed adapter made %d grants appear removed: %+v", len(out), out)
+	}
+}
+
+func TestAssignIDsKeepsCredentialOnlyDifferencesApart(t *testing.T) {
+	// Redaction gives both rules the same key; their raw values differ.
+	gs := []model.Grant{
+		{Key: "claude-code|rule|f|Bash(curl -H x:[redacted])", Value: "Bash(curl -H x:tokenone)"},
+		{Key: "claude-code|rule|f|Bash(curl -H x:[redacted])", Value: "Bash(curl -H x:tokentwo)"},
+		{Key: "other", Value: "v"},
+	}
+	assignIDs(gs, hexOf)
+	if gs[0].ID == gs[1].ID {
+		t.Errorf("ids are equal: %q", gs[0].ID)
+	}
+	if gs[2].ID != model.MakeID("other") {
+		t.Errorf("an unrelated grant changed its id: %q", gs[2].ID)
+	}
+}
+
+func TestRunTakesTheHistoryLock(t *testing.T) {
+	env := codexHome(t, []string{"alpha"}, nil)
+	if err := os.MkdirAll(env.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := fsx.Lock(filepath.Join(env.StateDir, "seen.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		Run(env, scan.Options{})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Run did not wait for the history lock")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not finish after the lock was released")
 	}
 }

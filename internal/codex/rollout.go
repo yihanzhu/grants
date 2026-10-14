@@ -16,7 +16,7 @@ import (
 
 // rolloutVersion is part of the cache key. Bump it whenever RolloutFacts or the code
 // that fills it changes, so old cache entries are not reused.
-const rolloutVersion = 1
+const rolloutVersion = 2
 
 // cacheName is the scan cache file name stem for rollout facts.
 const cacheName = "codex-rollouts"
@@ -317,6 +317,7 @@ func (x *extractor) snapshot(t time.Time, prefixes [][]string) {
 		if len(p) == 0 {
 			continue
 		}
+		p = normTokens(p)
 		clean = append(clean, p)
 		keys = append(keys, PatternJSON(toPositions(p)))
 	}
@@ -377,7 +378,7 @@ func (x *extractor) functionCall(b []byte) {
 	var prefix []string
 	if json.Unmarshal(a.PrefixRule, &prefix) == nil && len(prefix) > 0 && len(x.escs) < maxEscalations {
 		pc.esc = len(x.escs)
-		x.escs = append(x.escs, Escalation{T: t, Prefix: prefix, Justification: shorten(risk.Redact(a.Justification), maxJustification)})
+		x.escs = append(x.escs, Escalation{T: t, Prefix: normTokens(prefix), Justification: shorten(risk.Redact(a.Justification), maxJustification)})
 	}
 	if p.CallID == "" {
 		// No id to match the output with; assume it ran.

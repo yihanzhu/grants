@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/yihanzhu/grants/internal/model"
 	"github.com/yihanzhu/grants/internal/risk"
@@ -43,26 +45,44 @@ func windowTime(w model.Window) time.Time {
 	return w.After
 }
 
+// clean makes text safe to print: each control character (C0, DEL, C1) becomes a
+// visible escape such as \x1b. A rule or folder name from a config file must not be
+// able to move the cursor, erase lines or fake extra lines.
+func clean(s string) string {
+	if strings.IndexFunc(s, unicode.IsControl) < 0 {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&b, "\\x%02x", r) // r <= 0x9f for every control rune
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // tilde shows the home folder as ~.
 func tilde(path, home string) string {
 	if home == "" || home == "/" {
-		return path
+		return clean(path)
 	}
 	switch {
 	case path == home:
 		return "~"
 	case strings.HasPrefix(path, home+"/"):
-		return "~" + path[len(home):]
+		return clean("~" + path[len(home):])
 	}
-	return path
+	return clean(path)
 }
 
 // tildeText shows the home folder as ~ wherever a message names it.
 func tildeText(s, home string) string {
 	if home == "" || home == "/" {
-		return s
+		return clean(s)
 	}
-	return strings.ReplaceAll(s, home+"/", "~/")
+	return clean(strings.ReplaceAll(s, home+"/", "~/"))
 }
 
 // grantText is what a grant is, as one line of text: the rule, or the trusted folder.
@@ -75,10 +95,10 @@ func grantText(g model.Grant, home string) string {
 }
 
 func oneLine(s string) string {
-	if !strings.ContainsAny(s, "\r\n\t") {
-		return s
+	if strings.ContainsAny(s, "\r\n\t") {
+		s = strings.Join(strings.Fields(s), " ")
 	}
-	return strings.Join(strings.Fields(s), " ")
+	return clean(s)
 }
 
 // truncMiddle shortens s to n characters by cutting out its middle.
@@ -215,7 +235,7 @@ func scopeShort(g model.Grant) string {
 	switch g.Scope {
 	case model.ScopeProject, model.ScopeLocal, model.ScopeLegacy:
 		if g.Project != "" {
-			return string(g.Scope) + " …/" + filepath.Base(g.Project)
+			return string(g.Scope) + " …/" + clean(filepath.Base(g.Project))
 		}
 	}
 	return string(g.Scope)

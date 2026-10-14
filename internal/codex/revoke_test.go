@@ -2,7 +2,10 @@ package codex
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +23,30 @@ func mustRead(t *testing.T, path string) []byte {
 	return b
 }
 
+// planRevoke reads the file that holds g and applies RevokeDoc to it, the way the
+// revoke package does, without writing anything.
+func planRevoke(env model.Env, g model.Grant) ([]edit.Change, error) {
+	if err := checkRevocable(g); err != nil {
+		return nil, err
+	}
+	file := g.Location.File
+	if file == "" && g.Kind == model.KindTrust {
+		file = filepath.Join(env.CodexHome, "config.toml")
+	}
+	if file == "" {
+		return nil, errors.New("codex: the grant has no file")
+	}
+	doc, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("codex: read rules file: %w", err)
+	}
+	out, summary, err := RevokeDoc(env, g, doc)
+	if err != nil {
+		return nil, err
+	}
+	return []edit.Change{{File: file, Before: doc, After: out, GrantID: g.ID, Summary: summary}}, nil
+}
+
 func hasGrant(rep model.Report, kind model.Kind, status model.Status, value string) bool {
 	for _, g := range rep.Grants {
 		if g.Kind == kind && g.Status == status && g.Value == value {
@@ -29,13 +56,13 @@ func hasGrant(rep model.Report, kind model.Kind, status model.Status, value stri
 	return false
 }
 
-func TestPlanRevokeRule(t *testing.T) {
+func TestRevokeRule(t *testing.T) {
 	f := newFixture(t)
 	rep := Collect(f.env, scan.Options{})
 	g := find(t, rep, model.KindRule, model.StatusActive, "make ship")
 	before := mustRead(t, f.userRules)
 
-	changes, err := PlanRevoke(f.env, g)
+	changes, err := planRevoke(f.env, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +78,7 @@ func TestPlanRevokeRule(t *testing.T) {
 		t.Errorf("after =\n%s\nwant\n%s", c.After, want)
 	}
 	if !bytes.Equal(mustRead(t, f.userRules), before) {
-		t.Error("PlanRevoke wrote to the file")
+		t.Error("the planner wrote to the file")
 	}
 
 	// Apply, collect again, undo.
@@ -69,10 +96,10 @@ func TestPlanRevokeRule(t *testing.T) {
 	}
 }
 
-func TestPlanRevokeRuleRemovesDuplicates(t *testing.T) {
+func TestRevokeRuleRemovesDuplicates(t *testing.T) {
 	f := newFixture(t)
 	g := find(t, Collect(f.env, scan.Options{}), model.KindRule, model.StatusActive, "npm test")
-	changes, err := PlanRevoke(f.env, g)
+	changes, err := planRevoke(f.env, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +108,10 @@ func TestPlanRevokeRuleRemovesDuplicates(t *testing.T) {
 	}
 }
 
-func TestPlanRevokeProjectRule(t *testing.T) {
+func TestRevokeProjectRule(t *testing.T) {
 	f := newFixture(t)
 	g := find(t, Collect(f.env, scan.Options{}), model.KindRule, model.StatusActive, "make deploy")
-	changes, err := PlanRevoke(f.env, g)
+	changes, err := planRevoke(f.env, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +120,14 @@ func TestPlanRevokeProjectRule(t *testing.T) {
 	}
 }
 
-func TestPlanRevokeTrust(t *testing.T) {
+func TestRevokeTrust(t *testing.T) {
 	f := newFixture(t)
 	rep := Collect(f.env, scan.Options{})
 	before := mustRead(t, f.configPath)
 
 	// An existing folder is set to untrusted, not deleted.
 	g := find(t, rep, model.KindTrust, model.StatusActive, f.app)
-	changes, err := PlanRevoke(f.env, g)
+	changes, err := planRevoke(f.env, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +148,7 @@ func TestPlanRevokeTrust(t *testing.T) {
 
 	// A missing folder loses its entry.
 	g = find(t, rep, model.KindTrust, model.StatusActive, f.missing)
-	changes, err = PlanRevoke(f.env, g)
+	changes, err = planRevoke(f.env, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +157,7 @@ func TestPlanRevokeTrust(t *testing.T) {
 	}
 }
 
-func TestPlanRevokeRefusals(t *testing.T) {
+func TestRevokeRefusals(t *testing.T) {
 	f := newFixture(t)
 	rep := Collect(f.env, scan.Options{})
 
@@ -166,7 +193,7 @@ func TestPlanRevokeRefusals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changes, err := PlanRevoke(f.env, tt.g)
+			changes, err := planRevoke(f.env, tt.g)
 			if err == nil || changes != nil {
 				t.Fatalf("changes=%v err=%v", changes, err)
 			}

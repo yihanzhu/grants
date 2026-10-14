@@ -47,6 +47,24 @@ func writeNew(path string, data []byte) error {
 	return f.Close()
 }
 
+// saveCopy writes data to a new file in dir (mode 0600, name from the CreateTemp
+// pattern) and returns its path.
+func saveCopy(dir, pattern string, data []byte) (string, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return "", err
+	}
+	return f.Name(), f.Close()
+}
+
 // newBatchDir creates backups/<id> for the next batch. The ID is the UTC time; a
 // number is appended when the ID is already in the backups folder or the journal.
 func newBatchDir(stateDir string, now time.Time, taken map[string]bool) (string, string, error) {
@@ -87,8 +105,8 @@ func rollback(changes []Change, originals [][]byte, written int) error {
 }
 
 // Apply backs up every file, checks each still holds Change.Before, writes the new
-// content atomically, and records the batch in the journal under stateDir. It takes
-// one change per file. If any file differs from Before it returns ErrChanged and
+// content atomically, and records the batch in the journal under stateDir before the
+// first write. It takes one change per file. If any file differs from Before it returns ErrChanged and
 // writes nothing; if a write fails it restores the files already written.
 func Apply(stateDir string, now time.Time, changes []Change) (Batch, error) {
 	if len(changes) == 0 {
@@ -152,31 +170,53 @@ func Apply(stateDir string, now time.Time, changes []Change) (Batch, error) {
 			return Batch{}, fmt.Errorf("edit: back up %s: %w", c.File, err)
 		}
 		batch.Files = append(batch.Files, BatchFile{
-			File: c.File, Backup: backup, AfterHash: hashHex(c.After), GrantID: c.GrantID, Summary: c.Summary,
+			File: c.File, Backup: backup, BeforeHash: hashHex(originals[i]), AfterHash: hashHex(c.After),
+			GrantID: c.GrantID, Summary: c.Summary,
 		})
 	}
 
+	// Journal the batch before the first write. If this process dies half way, undo
+	// can still find the batch and the backups.
+	if err := appendJournal(stateDir, journalApply{Type: "apply", Batch: batch}); err != nil {
+		os.RemoveAll(dir)
+		return Batch{}, fmt.Errorf("edit: write journal: %w", err)
+	}
 	fail := func(written int, cause error) (Batch, error) {
 		if rerr := rollback(changes, originals, written); rerr != nil {
 			// Keep the backups: they are the only good copy left.
 			return Batch{}, fmt.Errorf("%w; restoring failed, originals are in %s: %v", cause, dir, rerr)
 		}
+		if aerr := appendJournal(stateDir, journalAbort{Type: "abort", ID: id}); aerr != nil {
+			// The batch stays in the journal, so keep its backups too.
+			return Batch{}, fmt.Errorf("%w; the batch is still in the journal and its backups are in %s: %v", cause, dir, aerr)
+		}
 		os.RemoveAll(dir)
 		return Batch{}, cause
 	}
 	for i, c := range changes {
-		if err := WriteFileAtomic(c.File, c.After); err != nil {
+		// Check again right before the rename: an agent may have written the file
+		// while the backups and the temp file were being written.
+		err := writeAtomic(c.File, c.After, func() error {
+			cur, err := os.ReadFile(c.File)
+			if err != nil || !bytes.Equal(cur, c.Before) {
+				return fmt.Errorf("%w: %s", ErrChanged, c.File)
+			}
+			return nil
+		})
+		if errors.Is(err, ErrChanged) {
+			return fail(i, err)
+		}
+		if err != nil {
 			return fail(i, fmt.Errorf("edit: write %s: %w", c.File, err))
 		}
-	}
-	if err := appendJournal(stateDir, journalApply{Type: "apply", Batch: batch}); err != nil {
-		return fail(len(changes), fmt.Errorf("edit: write journal: %w", err))
 	}
 	return batch, nil
 }
 
 // Undo restores the latest batch that is not undone yet. It refuses with ErrChanged
-// when a file changed after grants wrote it, unless force is set.
+// when a file changed after grants wrote it, unless force is set. A forced undo first
+// saves each such file to backups/<id>/before-undo-* and reports the path in
+// BatchFile.Saved. A backup that does not match BeforeHash is never restored.
 func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 	if _, err := os.Stat(stateDir); errors.Is(err, fs.ErrNotExist) {
 		return Batch{}, ErrNothingToUndo
@@ -202,26 +242,13 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 		return Batch{}, ErrNothingToUndo
 	}
 
-	// Read everything first so a refusal writes nothing.
+	// Read everything first so a refusal writes nothing. A file that already holds its
+	// backup was never written (Apply died before it) or is already restored; leave it.
 	current := make([][]byte, len(batch.Files))
 	existed := make([]bool, len(batch.Files))
+	untouched := make([]bool, len(batch.Files))
 	backups := make([][]byte, len(batch.Files))
 	for i, f := range batch.Files {
-		cur, err := os.ReadFile(f.File)
-		switch {
-		case err == nil:
-			existed[i] = true
-			current[i] = cur
-			if !force && hashHex(cur) != f.AfterHash {
-				return Batch{}, fmt.Errorf("%w: %s was edited after grants changed it (use force to restore anyway)", ErrChanged, f.File)
-			}
-		case errors.Is(err, fs.ErrNotExist):
-			if !force {
-				return Batch{}, fmt.Errorf("%w: %s no longer exists", ErrChanged, f.File)
-			}
-		default:
-			return Batch{}, fmt.Errorf("edit: read %s: %w", f.File, err)
-		}
 		data, err := os.ReadFile(f.Backup)
 		if errors.Is(err, fs.ErrNotExist) {
 			// The state folder may have moved since the batch was written.
@@ -231,7 +258,46 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 		if err != nil {
 			return Batch{}, fmt.Errorf("edit: read backup of %s: %w", f.File, err)
 		}
+		if f.BeforeHash != "" && hashHex(data) != f.BeforeHash {
+			return Batch{}, fmt.Errorf("edit: backup of %s does not match the original it was taken from (%s)", f.File, f.Backup)
+		}
 		backups[i] = data
+
+		cur, err := os.ReadFile(f.File)
+		switch {
+		case err == nil:
+			existed[i] = true
+			current[i] = cur
+			if bytes.Equal(cur, data) {
+				untouched[i] = true
+			} else if !force && hashHex(cur) != f.AfterHash {
+				return Batch{}, fmt.Errorf("%w: %s was edited after grants changed it (use force to restore anyway)", ErrChanged, f.File)
+			}
+		case errors.Is(err, fs.ErrNotExist):
+			if !force {
+				return Batch{}, fmt.Errorf("%w: %s no longer exists", ErrChanged, f.File)
+			}
+		default:
+			return Batch{}, fmt.Errorf("edit: read %s: %w", f.File, err)
+		}
+	}
+
+	// A forced undo overwrites content grants did not write. Keep a copy of it.
+	if force {
+		dir := filepath.Join(stateDir, "backups", batch.ID)
+		for i, f := range batch.Files {
+			if !existed[i] || untouched[i] || hashHex(current[i]) == f.AfterHash {
+				continue
+			}
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return Batch{}, fmt.Errorf("edit: create backup folder: %w", err)
+			}
+			saved, err := saveCopy(dir, fmt.Sprintf("before-undo-%d-%s-*", i+1, filepath.Base(f.File)), current[i])
+			if err != nil {
+				return Batch{}, fmt.Errorf("edit: keep a copy of %s: %w", f.File, err)
+			}
+			batch.Files[i].Saved = saved
+		}
 	}
 
 	fail := func(written int, cause error) (Batch, error) {
@@ -253,7 +319,25 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 		return Batch{}, cause
 	}
 	for i, f := range batch.Files {
-		if err := WriteFileAtomic(f.File, backups[i]); err != nil {
+		if untouched[i] {
+			continue
+		}
+		var check func() error
+		if !force {
+			// Check again right before the rename, in case an agent wrote meanwhile.
+			check = func() error {
+				cur, err := os.ReadFile(f.File)
+				if err != nil || hashHex(cur) != f.AfterHash {
+					return fmt.Errorf("%w: %s was edited after grants changed it (use force to restore anyway)", ErrChanged, f.File)
+				}
+				return nil
+			}
+		}
+		err := writeAtomic(f.File, backups[i], check)
+		if errors.Is(err, ErrChanged) {
+			return fail(i, err)
+		}
+		if err != nil {
 			return fail(i, fmt.Errorf("edit: restore %s: %w", f.File, err))
 		}
 	}

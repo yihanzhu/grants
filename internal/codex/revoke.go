@@ -3,7 +3,6 @@ package codex
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/yihanzhu/grants/internal/edit"
@@ -12,34 +11,13 @@ import (
 	"github.com/yihanzhu/grants/internal/risk"
 )
 
-// PlanRevoke returns the file edits that revoke g, without writing anything.
-//
-// A rule loses its prefix_rule statement. A trusted folder that still exists is set to
-// "untrusted" instead of deleted, because the Codex desktop app trusts a folder again
-// on its next thread when no decision is on file. A folder that no longer exists loses
-// its entry.
-func PlanRevoke(env model.Env, g model.Grant) ([]edit.Change, error) {
-	if err := checkRevocable(g); err != nil {
-		return nil, err
-	}
-	file := revokeFile(env, g)
-	if file == "" {
-		return nil, errors.New("codex: the grant has no file")
-	}
-	doc, err := os.ReadFile(file)
-	if err != nil {
-		return nil, fmt.Errorf("codex: read %s file: %w", map[model.Kind]string{model.KindRule: "rules", model.KindTrust: "config"}[g.Kind], err)
-	}
-	out, summary, err := RevokeDoc(env, g, doc)
-	if err != nil {
-		return nil, err
-	}
-	return []edit.Change{{File: file, Before: doc, After: out, GrantID: g.ID, Summary: summary}}, nil
-}
-
 // RevokeDoc applies the revoke of g to doc, the content of the file that holds it,
 // and returns the new content with a one-line summary. It lets a caller chain several
 // grants of one file on the same document.
+//
+// A rule loses its prefix_rule statement. A trusted folder that still exists is set to
+// "untrusted" instead of deleted, because the Codex desktop app trusts a folder again
+// on its next thread when no decision is on file. A folder that is gone loses its entry.
 func RevokeDoc(env model.Env, g model.Grant, doc []byte) (after []byte, summary string, err error) {
 	if err := checkRevocable(g); err != nil {
 		return nil, "", err
@@ -70,16 +48,6 @@ func checkRevocable(g model.Grant) error {
 	return nil
 }
 
-func revokeFile(env model.Env, g model.Grant) string {
-	if g.Location.File != "" {
-		return g.Location.File
-	}
-	if g.Kind == model.KindTrust {
-		return filepath.Join(env.CodexHome, "config.toml")
-	}
-	return ""
-}
-
 func revokeRule(g model.Grant, src []byte) ([]byte, string, error) {
 	out, n, err := RemoveRule(src, g.Pattern, "allow")
 	if err != nil {
@@ -97,7 +65,7 @@ func revokeTrust(g model.Grant, doc []byte) ([]byte, string, error) {
 		return nil, "", errors.New("codex: the trusted folder has no path")
 	}
 	table := []string{"projects", path}
-	if fsx.Exists(path) {
+	if !trustPathGone(path) {
 		out, err := edit.TOMLSetString(doc, table, "trust_level", "untrusted")
 		if err != nil {
 			return nil, "", fmt.Errorf("codex: edit config.toml: %w", err)
@@ -109,4 +77,11 @@ func revokeTrust(g model.Grant, doc []byte) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("codex: edit config.toml: %w", err)
 	}
 	return out, fmt.Sprintf("remove trusted folder %s (folder no longer exists)", path), nil
+}
+
+// trustPathGone reports whether a trusted folder was deleted: it is missing and its
+// parent is still there. A folder on a volume that is not mounted has no parent, so
+// it counts as present; deleting its entry would make Codex trust it again later.
+func trustPathGone(path string) bool {
+	return !fsx.Exists(path) && fsx.Exists(filepath.Dir(path))
 }

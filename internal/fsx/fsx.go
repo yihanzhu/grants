@@ -3,7 +3,6 @@ package fsx
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,32 +18,6 @@ func Exists(path string) bool {
 		return true
 	}
 	return isDenied(err)
-}
-
-// Readable reports whether folder exists and can be listed.
-func Readable(folder string) bool {
-	_, err := listErr(folder)
-	return err == nil
-}
-
-// Blocked reports whether folder exists but the OS denies access to it, for example
-// macOS privacy controls (EPERM) or file modes (EACCES). A missing folder is not
-// blocked, so callers can tell "gone" from "cannot look".
-func Blocked(folder string) bool {
-	_, err := listErr(folder)
-	return err != nil && isDenied(err)
-}
-
-func listErr(folder string) (struct{}, error) {
-	f, err := os.Open(folder)
-	if err != nil {
-		return struct{}{}, err
-	}
-	defer f.Close()
-	if _, err := f.ReadDir(1); err != nil && !errors.Is(err, io.EOF) {
-		return struct{}{}, err
-	}
-	return struct{}{}, nil
 }
 
 func isDenied(err error) bool {

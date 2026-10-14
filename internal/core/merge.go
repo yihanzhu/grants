@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strings"
 
 	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
@@ -67,10 +68,12 @@ func merge(env model.Env, reports []model.Report, obs *store.Observations) []mod
 		}
 	}
 	found := map[model.Agent]bool{}
+	unread := map[model.Agent][]string{}
 	for _, r := range reports {
 		found[r.Agent] = r.Found
+		unread[r.Agent] = append(unread[r.Agent], r.Unread...)
 	}
-	grants = append(grants, goneFromStore(env, obs, reported, found)...)
+	grants = append(grants, goneFromStore(env, obs, reported, found, unread)...)
 
 	assignIDs(grants, hexOf)
 	sortGrants(grants)
@@ -140,8 +143,9 @@ func enrichGone(obs *store.Observations, g *model.Grant) {
 
 // goneFromStore builds gone grants for grants that an earlier run saw and no adapter
 // reports now. An agent that is not found is skipped: its folder may just be missing
-// from this machine for the moment, which says nothing about its grants.
-func goneFromStore(env model.Env, obs *store.Observations, reported map[string]bool, found map[model.Agent]bool) []model.Grant {
+// from this machine for the moment, which says nothing about its grants. A key under
+// an unread prefix is skipped too: the adapter could not read its source this run.
+func goneFromStore(env model.Env, obs *store.Observations, reported map[string]bool, found map[model.Agent]bool, unread map[model.Agent][]string) []model.Grant {
 	keys := make([]string, 0, len(obs.Grants))
 	for k := range obs.Grants {
 		keys = append(keys, k)
@@ -151,7 +155,7 @@ func goneFromStore(env model.Env, obs *store.Observations, reported map[string]b
 	var out []model.Grant
 	for _, key := range keys {
 		s := obs.Grants[key]
-		if reported[key] || !found[s.Agent] || s.Last.IsZero() {
+		if reported[key] || !found[s.Agent] || s.Last.IsZero() || hasPrefix(key, unread[s.Agent]) {
 			continue
 		}
 		g := model.Grant{
@@ -177,6 +181,15 @@ func goneFromStore(env model.Env, obs *store.Observations, reported map[string]b
 	return out
 }
 
+func hasPrefix(key string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // idLen is the shortest id; it matches model.MakeID.
 const idLen = 7
 
@@ -195,6 +208,17 @@ func assignIDs(grants []model.Grant, hash func(string) string) {
 	for i := range grants {
 		length[i] = n
 		hashes[i] = hash(grants[i].Key)
+	}
+	// Redaction can give two rules the same key (they differ only in a credential).
+	// Their raw values still differ, so hash those too to keep the ids apart.
+	count := map[string]int{}
+	for _, h := range hashes {
+		count[h]++
+	}
+	for i := range grants {
+		if count[hashes[i]] > 1 {
+			hashes[i] = hash(grants[i].Key + "\x00" + grants[i].Value)
+		}
 	}
 	cut := func(i int) string {
 		if length[i] > len(hashes[i]) {

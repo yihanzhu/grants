@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,8 +66,17 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 			code = exitError
 		}
 	}()
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") && !isHelp(args[0]) && !isVersionFlag(args[0]) {
+	if len(args) == 0 {
 		return a.cmdSummary(args)
+	}
+	if strings.HasPrefix(args[0], "-") && !isHelp(args[0]) && !isVersionFlag(args[0]) {
+		// Flags before the command, as in "grants --no-color list": find the command
+		// and move it to the front. Every command takes its flags in any position.
+		i := leadingFlags(args)
+		if i == len(args) || !isCommandName(args[i]) {
+			return a.cmdSummary(args)
+		}
+		args = append([]string{args[i]}, append(append([]string{}, args[:i]...), args[i+1:]...)...)
 	}
 	name, rest := args[0], args[1:]
 	switch {
@@ -84,6 +94,34 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 	return exitUsage
 }
 
+// leadingFlags returns the index of the first argument that is not a flag. The
+// number after --unused belongs to it, but a word such as a command name does not.
+func leadingFlags(args []string) int {
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		f := strings.TrimLeft(args[i], "-")
+		i++
+		if f == "unused" && i < len(args) {
+			if _, err := strconv.Atoi(args[i]); err == nil {
+				i++
+			}
+		}
+	}
+	return i
+}
+
+func isCommandName(s string) bool {
+	if s == "help" {
+		return true
+	}
+	for _, c := range commands {
+		if c.name == s {
+			return true
+		}
+	}
+	return false
+}
+
 func isHelp(s string) bool {
 	return s == "-h" || s == "--help" || s == "-help"
 }
@@ -98,6 +136,9 @@ type globals struct {
 }
 
 const defaultUnusedDays = int(core.DefaultUnusedAfter / (24 * time.Hour))
+
+// maxUnusedDays keeps the window far from overflowing a time.Duration.
+const maxUnusedDays = 36500
 
 func (g *globals) register(fs *flag.FlagSet) {
 	g.registerBase(fs)
@@ -134,8 +175,8 @@ func (a *app) parse(name, usage string, fs *flag.FlagSet, g *globals, args []str
 		args = args[1:]
 	}
 	if g != nil {
-		if g.unused < 1 {
-			fmt.Fprintf(a.stderr, "grants %s: --unused needs a number of days, 1 or more\n", name)
+		if g.unused < 1 || g.unused > maxUnusedDays {
+			fmt.Fprintf(a.stderr, "grants %s: --unused needs a number of days, 1 to %d\n", name, maxUnusedDays)
 			return nil, exitUsage, true
 		}
 		a.st = style{on: !g.noColor && os.Getenv("NO_COLOR") == "" && isTerminal(a.stdout)}
@@ -203,6 +244,10 @@ func resolve(grants []model.Grant, q string, home string) (model.Grant, error) {
 }
 
 func (a *app) cmdVersion(args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintf(a.stderr, "grants version: unexpected argument %q\nRun grants help version for usage.\n", args[0])
+		return exitUsage
+	}
 	fmt.Fprintf(a.stdout, "grants %s\n", Version)
 	return exitOK
 }

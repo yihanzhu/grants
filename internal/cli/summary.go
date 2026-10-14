@@ -47,8 +47,9 @@ func lookRank(g model.Grant) int {
 	return -1
 }
 
-// A grant that grants revoke can remove in bulk is dead, one-off or unused. The summary
-// counts each grant in the first of these that fits, in this order.
+// A grant that grants revoke can remove in bulk is dead, one-off or unused. needsLook
+// treats a grant as the first of these that fits, in this order. The Clean up counts
+// in the summary do not: each one counts by its own flag, like the revoke selector.
 type cleanup int
 
 const (
@@ -182,16 +183,26 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 	ts := tallies(res)
 	order := []model.Agent{model.ClaudeCode, model.Codex}
 
+	// Each count is what the revoke command next to it would select, so a grant with
+	// two flags is in two counts.
 	active, agents := 0, 0
-	var clean [cleanUnused + 1]int
+	var nDead, nOneOff, nUnused int
 	for _, g := range res.Grants {
 		if g.Status != model.StatusActive {
 			continue
 		}
 		active++
-		clean[cleanupOf(g)]++
+		if isDead(g) {
+			nDead++
+		}
+		if isOneOff(g) {
+			nOneOff++
+		}
+		if isUnused(g) {
+			nUnused++
+		}
 	}
-	dead := clean[cleanDead]
+	dead := nDead
 	for _, ag := range order {
 		if t := ts[ag]; t != nil && t.found {
 			agents++
@@ -281,21 +292,21 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 		}
 	}
 
-	// The bulk commands. Each grant is in the first list that fits.
-	if clean[cleanDead]+clean[cleanOneOff]+clean[cleanUnused] > 0 {
+	// The bulk commands.
+	if nDead+nOneOff+nUnused > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, st.bold("Clean up"))
-		if n := clean[cleanDead]; n > 0 {
+		if n := nDead; n > 0 {
 			text := commas(n) + " grants point to deleted paths"
 			if n == 1 {
 				text = "1 grant points to a deleted path"
 			}
 			fmt.Fprintf(w, "  %s: %s\n", text, st.bold("grants revoke --dead"))
 		}
-		if n := clean[cleanOneOff]; n > 0 {
+		if n := nOneOff; n > 0 {
 			fmt.Fprintf(w, "  %s, approved for a single URL or script: %s\n", plural(n, "one-off rule", "one-off rules"), st.bold("grants revoke --one-off"))
 		}
-		if n := clean[cleanUnused]; n > 0 {
+		if n := nUnused; n > 0 {
 			cmd := "grants revoke --unused"
 			if res.Env.UnusedAfter != core.DefaultUnusedAfter {
 				cmd += " " + strconv.Itoa(int(res.Env.UnusedAfter/(24*time.Hour)))

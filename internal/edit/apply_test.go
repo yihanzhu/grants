@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -603,5 +604,228 @@ func TestApplyWithRealEditFunctions(t *testing.T) {
 	}
 	if read(t, js) != jdoc || read(t, tm) != tdoc {
 		t.Fatal("undo")
+	}
+}
+
+// stateFiles lists every regular file under dir with its content.
+func stateFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			b, _ := os.ReadFile(p)
+			out[p] = string(b)
+		}
+		return nil
+	})
+	return out
+}
+
+func TestUndoForceKeepsCopyOfNewerContent(t *testing.T) {
+	state, files, changes := fixture(t)
+	if _, err := Apply(state, t0, changes); err != nil {
+		t.Fatal(err)
+	}
+	newer := "[a]\nk = \"agent rewrote it\"\n"
+	write(t, files[1], newer, 0o600)
+
+	b, err := Undo(state, t0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read(t, files[1]) != "[a]\nk = \"1\"\n" {
+		t.Fatal("force did not restore")
+	}
+	if b.Files[1].Saved == "" || read(t, b.Files[1].Saved) != newer {
+		t.Fatalf("saved copy = %q", b.Files[1].Saved)
+	}
+	if !strings.HasPrefix(b.Files[1].Saved, filepath.Join(state, "backups", b.ID)) {
+		t.Fatalf("saved copy outside the batch folder: %s", b.Files[1].Saved)
+	}
+	if b.Files[0].Saved != "" {
+		t.Fatalf("file grants wrote was copied: %q", b.Files[0].Saved)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(b.Files[1].Saved); fi.Mode().Perm() != 0o600 {
+			t.Fatalf("saved copy mode %v", fi.Mode().Perm())
+		}
+	}
+}
+
+func TestUndoForceWithoutNewerContentSavesNothing(t *testing.T) {
+	state, _, changes := fixture(t)
+	if _, err := Apply(state, t0, changes); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Undo(state, t0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range b.Files {
+		if f.Saved != "" {
+			t.Fatalf("saved %q although nothing was lost", f.Saved)
+		}
+	}
+	for p := range stateFiles(t, state) {
+		if strings.Contains(filepath.Base(p), "before-undo") {
+			t.Fatalf("unexpected copy %s", p)
+		}
+	}
+}
+
+// hookOnce runs fn the first time a file named base is about to be renamed.
+func hookOnce(t *testing.T, base string, fn func()) {
+	t.Helper()
+	done := false
+	beforeRenameHook = func(path string) {
+		if !done && filepath.Base(path) == base {
+			done = true
+			fn()
+		}
+	}
+	t.Cleanup(func() { beforeRenameHook = nil })
+}
+
+func TestApplyRefusesWhenFileChangesBeforeRename(t *testing.T) {
+	state, files, changes := fixture(t)
+	agent := "[a]\nk = \"agent\"\n"
+	hookOnce(t, "config.toml", func() { write(t, files[1], agent, 0o600) })
+
+	_, err := Apply(state, t0, changes)
+	if !errors.Is(err, ErrChanged) {
+		t.Fatalf("err = %v", err)
+	}
+	if read(t, files[1]) != agent {
+		t.Fatal("agent write was overwritten")
+	}
+	if read(t, files[0]) != `{"a":["x","y"]}` {
+		t.Fatal("first file was not rolled back")
+	}
+	if list, _ := Batches(state); len(list) != 0 {
+		t.Fatalf("failed batch listed: %+v", list)
+	}
+	for p := range stateFiles(t, filepath.Dir(files[0])) {
+		if strings.Contains(p, ".grants-") {
+			t.Fatalf("temp file left: %s", p)
+		}
+	}
+}
+
+func TestUndoRefusesWhenFileChangesBeforeRename(t *testing.T) {
+	state, files, changes := fixture(t)
+	if _, err := Apply(state, t0, changes); err != nil {
+		t.Fatal(err)
+	}
+	agent := "[a]\nk = \"agent\"\n"
+	hookOnce(t, "config.toml", func() { write(t, files[1], agent, 0o600) })
+
+	if _, err := Undo(state, t0, false); !errors.Is(err, ErrChanged) {
+		t.Fatalf("err = %v", err)
+	}
+	if read(t, files[1]) != agent {
+		t.Fatal("agent write was overwritten")
+	}
+	// The file restored before the failure is put back, and the batch is still undoable.
+	if read(t, files[0]) != `{"a":["y"]}` {
+		t.Fatal("first file was not rolled back")
+	}
+	if list, _ := Batches(state); list[0].Undone {
+		t.Fatal("refused undo was journaled")
+	}
+}
+
+func TestApplyJournalsBeforeTheFirstWrite(t *testing.T) {
+	state, files, changes := fixture(t)
+	var seen string
+	hookOnce(t, "settings.json", func() { seen = read(t, filepath.Join(state, "journal.jsonl")) })
+	b, err := Apply(state, t0, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seen, `"id":"`+b.ID+`"`) {
+		t.Fatalf("journal before the first rename = %q", seen)
+	}
+	if list, _ := Batches(state); len(list) != 1 {
+		t.Fatalf("batches = %+v", list)
+	}
+	_ = files
+}
+
+func TestUndoOfHalfAppliedBatch(t *testing.T) {
+	// Apply died after the first rename: the journal has the batch, but the second
+	// file still holds its original content.
+	state, files, changes := fixture(t)
+	if _, err := Apply(state, t0, changes); err != nil {
+		t.Fatal(err)
+	}
+	write(t, files[1], "[a]\nk = \"1\"\n", 0o600)
+
+	if _, err := Undo(state, t0, false); err != nil {
+		t.Fatalf("undo of a half-applied batch: %v", err)
+	}
+	if read(t, files[0]) != `{"a":["x","y"]}` || read(t, files[1]) != "[a]\nk = \"1\"\n" {
+		t.Fatal("files not original")
+	}
+	if list, _ := Batches(state); !list[0].Undone {
+		t.Fatal("not journaled as undone")
+	}
+}
+
+func TestAbortedBatchIsHiddenAndItsIDCanBeReused(t *testing.T) {
+	state := t.TempDir()
+	rec := func(v any) {
+		if err := appendJournal(state, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec(journalApply{Type: "apply", Batch: Batch{ID: "X", Time: t0, Files: []BatchFile{{File: "/f"}}}})
+	rec(journalAbort{Type: "abort", ID: "X"})
+	if list, _ := Batches(state); len(list) != 0 {
+		t.Fatalf("aborted batch listed: %+v", list)
+	}
+	rec(journalApply{Type: "apply", Batch: Batch{ID: "X", Time: t0.Add(time.Hour), Files: []BatchFile{{File: "/g"}}}})
+	list, _ := Batches(state)
+	if len(list) != 1 || list[0].Files[0].File != "/g" {
+		t.Fatalf("batches = %+v", list)
+	}
+}
+
+func TestUndoRefusesDamagedBackup(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		state, files, changes := fixture(t)
+		b, err := Apply(state, t0, changes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.Files[0].BeforeHash != hashHex([]byte(`{"a":["x","y"]}`)) {
+			t.Fatalf("BeforeHash = %q", b.Files[0].BeforeHash)
+		}
+		write(t, b.Files[0].Backup, "", 0o600)
+
+		if _, err := Undo(state, t0, force); err == nil || errors.Is(err, ErrChanged) {
+			t.Fatalf("force=%v: err = %v", force, err)
+		}
+		if read(t, files[0]) != `{"a":["y"]}` || read(t, files[1]) != "[a]\nk = \"2\"\n" {
+			t.Fatalf("force=%v: refused undo wrote files", force)
+		}
+		if list, _ := Batches(state); list[0].Undone {
+			t.Fatal("refused undo was journaled")
+		}
+	}
+}
+
+func TestUndoOfOldJournalWithoutBeforeHash(t *testing.T) {
+	state, files, changes := fixture(t)
+	if _, err := Apply(state, t0, changes); err != nil {
+		t.Fatal(err)
+	}
+	jp := filepath.Join(state, "journal.jsonl")
+	old := regexp.MustCompile(`"before_hash":"[0-9a-f]*",`).ReplaceAllString(read(t, jp), "")
+	write(t, jp, old, 0o600)
+	if _, err := Undo(state, t0, false); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, files[0]) != `{"a":["x","y"]}` {
+		t.Fatal("not restored")
 	}
 }

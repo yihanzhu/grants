@@ -83,7 +83,7 @@ func (c *collector) ruleGrants(sf *settingsFile) {
 		g := c.newRule(v, r, lines[r])
 		res := dateGrant(ruleObs(snaps, normRule(r)), true)
 		g.Granted, g.Evidence = res.Granted, res.Evidence
-		c.refineWithDecision(&g, sf)
+		c.refineWithDecision(&g, sf, v.allow)
 		g.Usage = c.ruleUsage(r, sf.Base, sf.Project, usageCutoff(snaps, g.Granted.After))
 		c.rep.Grants = append(c.rep.Grants, g)
 	}
@@ -113,7 +113,7 @@ func (c *collector) ruleGrants(sf *settingsFile) {
 		g.Location, g.Flags, g.Revocable = model.Location{}, nil, false
 		switch {
 		case v.state == stateMissing || (v.state == stateOK && !v.invalid):
-			g.Status, g.RevokeNote = model.StatusGone, "Already removed."
+			g.Status, g.RevokeNote, g.Removed = model.StatusGone, "Already removed.", res.RemovedAt
 		default:
 			g.Status, g.RevokeNote = model.StatusUnknown, "File not readable."
 		}
@@ -293,15 +293,28 @@ func setKey(m map[string]bool) string {
 }
 
 // refineWithDecision narrows the window with a "don't ask again" answer that matches the
-// rule and falls inside the window.
-func (c *collector) refineWithDecision(g *model.Grant, sf *settingsFile) {
-	keys, ok := match.ClaudeRuleKeys(match.ParseClaudeRule(g.Value), sf.Base)
+// rule and falls inside the window. An answer dates only the most specific rule of the
+// file that it matches: it made that rule, not a broader one that happens to cover it.
+func (c *collector) refineWithDecision(g *model.Grant, sf *settingsFile, allow []string) {
+	rule := match.ParseClaudeRule(g.Value)
+	if !rule.HasSpec && specTools[rule.Tool] {
+		return // a bare Bash or Read rule is never the product of one command's answer
+	}
+	keys, ok := match.ClaudeRuleKeys(rule, sf.Base)
 	if !ok {
 		return
 	}
-	want := make(map[match.Key]bool, len(keys))
-	for _, k := range keys {
-		want[k] = true
+	want := keySet(keys)
+	// Keys of the rules in this file that are narrower than this one.
+	var narrower []map[match.Key]bool
+	mine := specificity(g.Value, sf.Base)
+	for _, other := range allow {
+		if other == g.Value || specificity(other, sf.Base) <= mine {
+			continue
+		}
+		if ks, ok := match.ClaudeRuleKeys(match.ParseClaudeRule(other), sf.Base); ok {
+			narrower = append(narrower, keySet(ks))
+		}
 	}
 	var best *Decision
 	var bestPath string
@@ -310,7 +323,7 @@ func (c *collector) refineWithDecision(g *model.Grant, sf *settingsFile) {
 		if len(f.Decisions) == 0 {
 			continue
 		}
-		if sf.Project != "" && !inside(f.Cwd, sf.Project) {
+		if sf.Project != "" && !fsx.Within(f.Cwd, sf.Project) {
 			continue
 		}
 		for i := range f.Decisions {
@@ -318,7 +331,7 @@ func (c *collector) refineWithDecision(g *model.Grant, sf *settingsFile) {
 			if (!g.Granted.After.IsZero() && d.T.Before(g.Granted.After)) || (!g.Granted.Before.IsZero() && d.T.After(g.Granted.Before)) {
 				continue
 			}
-			if !anyKey(d.Keys, want) || (best != nil && !d.T.Before(best.T)) {
+			if !anyKey(d.Keys, want) || (best != nil && !d.T.Before(best.T)) || answeredByNarrower(d.Keys, narrower) {
 				continue
 			}
 			best, bestPath = d, p
@@ -331,6 +344,58 @@ func (c *collector) refineWithDecision(g *model.Grant, sf *settingsFile) {
 	g.Granted.Source = `you chose "don't ask again"`
 	g.Evidence = append(g.Evidence, model.Evidence{Time: best.T, What: "approved-always", Detail: best.Tool + ": " + best.Summary, Source: bestPath})
 	sort.SliceStable(g.Evidence, func(i, j int) bool { return g.Evidence[i].Time.Before(g.Evidence[j].Time) })
+}
+
+// specTools are the tools whose rules take a spec in parentheses.
+var specTools = map[string]bool{
+	"Bash": true, "Read": true, "Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true, "WebFetch": true,
+}
+
+func keySet(keys []match.Key) map[match.Key]bool {
+	m := make(map[match.Key]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+func answeredByNarrower(keys []match.Key, narrower []map[match.Key]bool) bool {
+	for _, n := range narrower {
+		if anyKey(keys, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// exactRank ranks a rule with no wildcard above every wildcard rule.
+const exactRank = 1 << 20
+
+// specificity ranks how narrow a rule is, so that of two rules that match one call the
+// narrower ranks higher: an exact rule, then a longer command prefix or folder, then a
+// shorter one, then a rule with no spec.
+func specificity(rule string, base match.RuleBase) int {
+	r := match.ParseClaudeRule(rule)
+	spec := strings.TrimSpace(r.Spec)
+	if !r.HasSpec || spec == "" || spec == "*" {
+		return 0
+	}
+	switch {
+	case r.Tool == "Bash":
+		if p, ok := strings.CutSuffix(spec, ":*"); ok {
+			return len(match.Tokens(p))
+		}
+		if p, ok := strings.CutSuffix(spec, " *"); ok {
+			return len(match.Tokens(p))
+		}
+		return exactRank
+	case r.Tool == "WebFetch":
+		return 1
+	}
+	if dir, ok := strings.CutSuffix(spec, "/**"); ok {
+		return len(match.ResolvePath(dir, base))
+	}
+	return exactRank
 }
 
 func anyKey(keys []match.Key, want map[match.Key]bool) bool {

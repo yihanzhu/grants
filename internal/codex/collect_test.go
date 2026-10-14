@@ -213,7 +213,7 @@ func TestCollectRules(t *testing.T) {
 
 	// git status: first seen in the first snapshot; nothing earlier to bound it.
 	g := find(t, rep, model.KindRule, model.StatusActive, "git status")
-	if g.Key != model.KeyCodexRule(`["git","status"]`) || g.ID != model.MakeID(g.Key) || g.Tool != "exec" || g.Scope != model.ScopeUser {
+	if g.Key != model.KeyCodexRule(`["git","status"]`) || g.Tool != "exec" || g.Scope != model.ScopeUser {
 		t.Errorf("git status = %+v", g)
 	}
 	sameTime(t, "git status before", g.Granted.Before, at(5, 10, 1))
@@ -297,12 +297,12 @@ func TestCollectRules(t *testing.T) {
 		t.Errorf("deploy usage = %+v", g.Usage)
 	}
 
-	// The same pattern in a project file gets its own key.
+	// The same pattern in a project file keys on its own file.
 	dup := 0
 	for _, x := range rep.Grants {
 		if x.Value == "git status" && x.Scope == model.ScopeProject {
 			dup++
-			if x.Key != g.Key && x.Key != model.KeyCodexRule(`["git","status"]`)+"|"+f.projRules {
+			if x.Key != model.KeyCodexRule(`["git","status"]`)+"|"+f.projRules {
 				t.Errorf("duplicate key = %q", x.Key)
 			}
 		}

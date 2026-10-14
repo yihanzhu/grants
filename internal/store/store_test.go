@@ -127,18 +127,3 @@ func TestObsAndTimeline(t *testing.T) {
 		t.Fatalf("%+v", obs)
 	}
 }
-
-func TestMissing(t *testing.T) {
-	o := &Observations{}
-	o.Record(t0, []model.Grant{g("a", "A"), g("b", "B"), g("c", "C")})
-	got := o.Missing(map[string]bool{"a": true})
-	if len(got) != 2 || got[0].Value != "B" || got[1].Value != "C" {
-		t.Fatalf("%+v", got)
-	}
-	if len(o.Missing(map[string]bool{"a": true, "b": true, "c": true})) != 0 {
-		t.Fatal("nothing should be missing")
-	}
-	if n := len((&Observations{}).Missing(nil)); n != 0 {
-		t.Fatal(n)
-	}
-}

@@ -5,9 +5,9 @@ grants is a local ledger of the permissions you have given AI coding agents. It 
 ## Principles
 
 - **Local only.** grants never opens a network connection.
-- **Read-only by default.** Only `revoke` and `undo` write, and only after you confirm.
+- **Read-only by default.** Only `revoke` and `undo` write. `revoke` shows a plan and asks first. `undo` restores only files that have not changed since the revoke, unless you pass `--force`.
 - **Change only what you asked for.** Edits touch the bytes that hold the grant, are checked by parsing the file again, and are backed up first. `grants undo` restores the backup.
-- **No copy of your history.** grants reads session transcripts to date grants and measure use. Its cache keeps hashed usage keys and short, redacted evidence, never full commands or conversation text.
+- **No copy of your history.** grants reads session transcripts to date grants and measure use. Its cache keeps hashed usage keys and short, redacted excerpts (approved commands up to 120 characters, Codex justifications up to 160), never conversation text.
 - **Show what can't be known.** When a date is a range or an estimate, the output says so.
 
 ## What counts as a grant
@@ -78,7 +78,7 @@ Before writing, grants copies each file to `<state>/backups/<batch>/` and checks
 `grants` with no command prints a headline, a table, then two lists:
 
 - **Needs a look**: active grants that are high risk or hold a credential (`secret`). A grant flagged `dead-path` or `one-off` that grants can revoke moves to Clean up, unless it holds a credential. Credentials always stay in view.
-- **Clean up**: the bulk commands. Each grant is counted in the first list that fits: `dead-path` (`grants revoke --dead`), `one-off` (`grants revoke --one-off`), then `unused` (`grants revoke --unused`, with the number of days when it is not 90). The list shows the backup, preview and undo hint once.
+- **Clean up**: the bulk commands. Each count is what the command next to it would select, so a grant with two flags is in two counts: `dead-path` (`grants revoke --dead`), `one-off` (`grants revoke --one-off`) and `unused` (`grants revoke --unused`, with the number of days when it is not 90). The list shows the backup, preview and undo hint once.
 
 ## Display
 

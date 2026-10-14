@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 // version whenever the facts or the way they are computed change.
 const (
 	transcriptCacheName    = "claude-transcripts"
-	transcriptCacheVersion = 1
+	transcriptCacheVersion = 2
 )
 
 // Use counts how often history matched one usage key.
@@ -35,7 +36,16 @@ type TranscriptFacts struct {
 	Snapshots   []SettingsSnapshot // allow lists seen in Edit/Write results on settings files
 	FileHistory []FileHistoryRef   // file-history backups of settings files
 	Decisions   []Decision         // "don't ask again" answers
-	Usage       map[match.Key]Use
+	Usage       map[match.Key]Use  // this file alone; Collect rebuilds it from Calls
+	Calls       []ToolCall         // every counted tool call, so copies of a session count once
+}
+
+// ToolCall is one counted tool call. A resumed or forked session copies the calls of
+// its parent into a new transcript, and ID lets Collect count each call once.
+type ToolCall struct {
+	ID   uint64 // hash of the tool_use id; 0 when the call has none and is never deduped
+	Last int64  // unix seconds
+	Keys []match.Key
 }
 
 // SettingsSnapshot is the allow list of a settings file at one moment. Rules are
@@ -123,7 +133,27 @@ func extractTranscript(path, projectsRoot, historyRoot string) (TranscriptFacts,
 	if x.f.SessionID == "" {
 		x.f.SessionID = sess
 	}
+	x.resolveHistory()
 	return *x.f, nil
+}
+
+// resolveHistory turns relative file-history paths into absolute ones with the working
+// folder of the transcript. A path that cannot be resolved is dropped.
+func (x *extractor) resolveHistory() {
+	kept := x.f.FileHistory[:0]
+	for _, r := range x.f.FileHistory {
+		if !filepath.IsAbs(r.File) {
+			if !filepath.IsAbs(x.f.Cwd) {
+				continue
+			}
+			r.File = filepath.Join(x.f.Cwd, r.File)
+			if !isSettingsPath(r.File) {
+				continue
+			}
+		}
+		kept = append(kept, r)
+	}
+	x.f.FileHistory = kept
 }
 
 // sessionFolder returns the session id a transcript belongs to: the file name for a
@@ -207,7 +237,7 @@ func (x *extractor) toolUse(line []byte, t time.Time) {
 		use := match.ClaudeToolUse{Name: b.Name, Command: in.Command, URL: in.URL}
 		use.FilePath = firstNonEmpty(in.FilePath, in.NotebookPath, in.Path)
 		keys := match.ClaudeToolKeys(use)
-		x.count(keys, t)
+		x.count(b.ID, keys, t)
 		ref := recentUse{name: b.Name, keys: keys, short: shorten(firstNonEmpty(in.Command, use.FilePath, in.URL), 400)}
 		x.remember(b.ID, ref)
 		x.remember(rec.UUID, ref)
@@ -232,18 +262,25 @@ func (x *extractor) recall(id string) (recentUse, bool) {
 	return r, ok
 }
 
-// count adds one use to every distinct key of a tool call.
-func (x *extractor) count(keys []match.Key, t time.Time) {
+// count adds one use to every distinct key of a tool call and records the call.
+func (x *extractor) count(id string, keys []match.Key, t time.Time) {
 	clear(x.callKeys)
 	last := int64(0)
 	if !t.IsZero() {
 		last = t.Unix()
+	}
+	call := ToolCall{Last: last}
+	if id != "" {
+		h := fnv.New64a()
+		h.Write([]byte(id))
+		call.ID = h.Sum64()
 	}
 	for _, k := range keys {
 		if _, dup := x.callKeys[k]; dup {
 			continue
 		}
 		x.callKeys[k] = struct{}{}
+		call.Keys = append(call.Keys, k)
 		u := x.f.Usage[k]
 		u.Count++
 		if last > u.Last {
@@ -251,6 +288,7 @@ func (x *extractor) count(keys []match.Key, t time.Time) {
 		}
 		x.f.Usage[k] = u
 	}
+	x.f.Calls = append(x.f.Calls, call)
 }
 
 func (x *extractor) decision(line []byte, t time.Time) {
@@ -308,7 +346,8 @@ func (x *extractor) fileHistory(line []byte) {
 		return
 	}
 	add := func(file string, b fhBackup) {
-		if !isSettingsPath(file) {
+		// Claude Code keys files inside the working folder by relative path.
+		if !isSettingsPath(file) && (filepath.IsAbs(file) || !isSettingsPath("/"+file)) {
 			return
 		}
 		t := parseTime(b.BackupTime)
@@ -333,6 +372,7 @@ func (x *extractor) fileHistory(line []byte) {
 
 // editResult is the part of a user record's toolUseResult that describes a file edit.
 type editResult struct {
+	Type         string     `json:"type"` // Write: "create" or "update"
 	FilePath     string     `json:"filePath"`
 	Content      *string    `json:"content"` // Write
 	OriginalFile *string    `json:"originalFile"`
@@ -380,12 +420,13 @@ type editStep struct {
 }
 
 // editStates returns the file content before and after one edit, when the result says
-// enough to rebuild them. A file that did not exist before a Write counts as empty.
+// enough to rebuild them. A Write that creates a file counts as starting from empty.
+// An "update" Write with no original content says nothing about the earlier state.
 func editStates(r editResult) (before, after string, haveBefore, haveAfter bool) {
 	if r.Content != nil { // Write
 		if r.OriginalFile != nil {
 			before, haveBefore = *r.OriginalFile, true
-		} else {
+		} else if r.Type == "create" {
 			haveBefore = true // created: nothing was allowed before
 		}
 		return before, *r.Content, haveBefore, true

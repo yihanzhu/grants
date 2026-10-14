@@ -87,6 +87,10 @@ func TestClaudePathRules(t *testing.T) {
 		{"Edit(~/notes/inbox/**)", ClaudeToolUse{Name: "Write", FilePath: "/home/u/notes/inbox/x.md"}, true},
 		{"Edit(//etc/hosts)", ClaudeToolUse{Name: "Edit", FilePath: "/etc/hosts"}, true},
 		{"Read(src/**)", ClaudeToolUse{Name: "Grep", FilePath: "/w/p/src/x.go"}, true},
+		{"Read(//**)", ClaudeToolUse{Name: "Read", FilePath: "/etc/hosts"}, true},
+		{"Read(/**)", ClaudeToolUse{Name: "Read", FilePath: "/home/u/.claude/x.md"}, true},
+		{"Read(/**)", ClaudeToolUse{Name: "Read", FilePath: "/home/u/other.md"}, false},
+		{"Read(~/**)", ClaudeToolUse{Name: "Read", FilePath: "/home/u/other.md"}, true},
 		{"WebFetch(domain:example.com)", ClaudeToolUse{Name: "WebFetch", URL: "https://EXAMPLE.com/a"}, true},
 		{"mcp__gh", ClaudeToolUse{Name: "mcp__gh__create_issue"}, true},
 		{"mcp__gh__*", ClaudeToolUse{Name: "mcp__gh__create_issue"}, true},
@@ -120,5 +124,18 @@ func TestCodexPatterns(t *testing.T) {
 		if got := matches(CodexPatternKeys(c.pattern), ArgvKeys(c.argv)); got != c.want {
 			t.Errorf("%q vs %q: got %v want %v", c.pattern, c.argv, got, c.want)
 		}
+	}
+}
+
+func TestCodexPatternKeysCap(t *testing.T) {
+	ten := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	// 1000 combinations are too many to list: no keys, so callers report usage as unknown.
+	if keys := CodexPatternKeys([][]string{ten, ten, ten}); len(keys) != 0 {
+		t.Errorf("got %d keys for an over-limit pattern, want none", len(keys))
+	}
+	// 64 combinations are listed in full.
+	four := []string{"a", "b", "c", "d"}
+	if keys := CodexPatternKeys([][]string{four, four, four}); len(keys) != 64 {
+		t.Errorf("got %d keys, want 64", len(keys))
 	}
 }

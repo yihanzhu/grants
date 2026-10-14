@@ -163,7 +163,7 @@ func renderShow(w io.Writer, g model.Grant, res core.Result, st style, termW int
 func evidenceSource(src string, env model.Env) string {
 	for _, root := range []string{env.CodexHome, env.ClaudeDir} {
 		if root != "" && strings.HasPrefix(src, root+"/") {
-			return src[len(root)+1:]
+			return clean(src[len(root)+1:])
 		}
 	}
 	return tilde(src, env.Home)

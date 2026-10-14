@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -62,6 +63,11 @@ func ParseRules(src []byte) []Rule {
 		start := max(lineStart(src, p.i), prevEnd)
 		begin := p.i
 		r, err := p.statement()
+		if ls := lineStart(src, begin); err == nil && begin > ls && len(bytes.TrimLeft(src[ls:begin], " \t")) == 0 {
+			// An indented call sits inside a for/if/def block. Removing it could
+			// leave the block empty, and Codex may never run it.
+			err = errors.New("statement inside a block")
+		}
 		if err != nil {
 			p.i = recoverEnd(src, begin)
 			r = Rule{Err: fmt.Sprintf("line %d: %v", lineOf(src, begin), err)}

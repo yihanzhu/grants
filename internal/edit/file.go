@@ -12,6 +12,18 @@ import (
 // reader never sees a half-written file. If path is a symlink it writes the target and
 // keeps the link. An existing file keeps its permission bits; a new file gets 0600.
 func WriteFileAtomic(path string, data []byte) error {
+	return writeAtomic(path, data, nil)
+}
+
+// beforeRenameHook runs just before the check in writeAtomic. Tests use it to
+// simulate another program writing the file at the worst moment.
+var beforeRenameHook func(path string)
+
+// writeAtomic is WriteFileAtomic with an optional check. The check runs after the
+// temp file is written and synced, right before the rename, so the window between
+// the check and the rename is as short as it can be. If it fails, nothing is replaced
+// and its error is returned as is.
+func writeAtomic(path string, data []byte, check func() error) error {
 	target := path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved
@@ -53,6 +65,15 @@ func WriteFileAtomic(path string, data []byte) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return fail(fmt.Errorf("edit: close %s: %w", tmpName, err))
+	}
+	if beforeRenameHook != nil {
+		beforeRenameHook(path)
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			os.Remove(tmpName)
+			return err
+		}
 	}
 	if err := os.Rename(tmpName, target); err != nil {
 		return fail(fmt.Errorf("edit: replace %s: %w", target, err))

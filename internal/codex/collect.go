@@ -14,10 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
 	"github.com/yihanzhu/grants/internal/model"
-	"github.com/yihanzhu/grants/internal/risk"
 	"github.com/yihanzhu/grants/internal/scan"
 	"github.com/yihanzhu/grants/internal/timeline"
 )
@@ -68,6 +69,8 @@ type collector struct {
 	cfgPath  string
 	rep      model.Report
 	trusted  []trustEntry
+	cfgBad   bool            // config.toml could not be read or parsed
+	trustSet map[string]bool // every folder the config or a backup trusts
 	backups  []backupData
 	files    []ruleFile
 	blocked  []string // trusted folders whose rules folder macOS would not let us read
@@ -112,9 +115,21 @@ func (c *collector) readConfig() {
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			c.note("warn", "Could not read Codex config.toml: %v", err)
+			c.cfgBad = true
 		}
 	} else if c.trusted, err = parseTrusted(doc); err != nil {
-		c.note("warn", "Could not parse Codex config.toml, so trusted folders are missing: %v", err)
+		c.cfgBad = true
+		// Name only the line: the parser error can quote part of the file, which may
+		// be an unquoted secret.
+		var pe toml.ParseError
+		if errors.As(err, &pe) {
+			c.note("warn", "Could not parse Codex config.toml (syntax error at line %d), so trusted folders are missing", pe.Position.Line)
+		} else {
+			c.note("warn", "Could not parse Codex config.toml, so trusted folders are missing")
+		}
+	}
+	if c.cfgBad {
+		c.rep.Unread = append(c.rep.Unread, model.KeyCodexTrust(""))
 	}
 	for _, b := range configBackups(c.cfgPath) {
 		data, err := os.ReadFile(b.Path)
@@ -131,16 +146,30 @@ func (c *collector) readConfig() {
 		}
 		c.backups = append(c.backups, backupData{backupFile: b, Trusted: set})
 	}
+	c.trustSet = map[string]bool{}
+	for _, t := range c.trusted {
+		c.trustSet[t.Path] = true
+	}
+	for _, b := range c.backups {
+		for p := range b.Trusted {
+			c.trustSet[p] = true
+		}
+	}
 }
 
 // readRules loads user, managed and project rules files.
 func (c *collector) readRules() {
 	userDir := filepath.Join(c.env.CodexHome, "rules")
 	seen := map[string]bool{}
+	unread := false // a rules file or folder could not be read, so its rules are unknown
 	add := func(dir string, scope model.Scope, project string) (blocked bool) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM)
+			blocked = errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM)
+			if !errors.Is(err, fs.ErrNotExist) && (scope != model.ScopeProject || !blocked) {
+				unread = true // a blocked project folder is reported as such, not as a gap
+			}
+			return blocked
 		}
 		for _, e := range entries {
 			if !strings.HasSuffix(e.Name(), ".rules") {
@@ -148,13 +177,18 @@ func (c *collector) readRules() {
 			}
 			p := filepath.Join(dir, e.Name())
 			info, err := os.Stat(p)
-			if err != nil || !info.Mode().IsRegular() || seen[p] {
+			if err != nil {
+				unread = unread || !errors.Is(err, fs.ErrNotExist)
+				continue
+			}
+			if !info.Mode().IsRegular() || seen[p] {
 				continue
 			}
 			seen[p] = true
 			src, err := os.ReadFile(p)
 			if err != nil {
 				c.note("warn", "Could not read rules file %s: %v", p, err)
+				unread = true
 				continue
 			}
 			f := ruleFile{Path: p, Scope: scope, Project: project, Rules: ParseRules(src), Mod: info.ModTime()}
@@ -169,6 +203,10 @@ func (c *collector) readRules() {
 		if add(filepath.Join(t.Path, ".codex", "rules"), model.ScopeProject, t.Path) {
 			c.blocked = append(c.blocked, t.Path)
 		}
+	}
+	if unread {
+		// Rule keys do not name their file, so every stored rule is unverified this run.
+		c.rep.Unread = append(c.rep.Unread, model.KeyCodexRule(""))
 	}
 	if n := len(c.blocked); n > 0 {
 		c.note("warn", "%s could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.", model.Plural(n, "trusted folder", "trusted folders"))
@@ -265,7 +303,7 @@ func (c *collector) buildSnaps() {
 
 // inScope reports whether a session counts as evidence for a grant limited to folder.
 // An empty folder means every session.
-func inScope(cwd, folder string) bool { return folder == "" || under(cwd, folder) }
+func inScope(cwd, folder string) bool { return folder == "" || fsx.Within(cwd, folder) }
 
 func (c *collector) assemble() {
 	rules := c.activeRules()
@@ -276,11 +314,6 @@ func (c *collector) assemble() {
 	all = append(all, rules...)
 	all = append(all, gone...)
 	all = append(all, trusts...)
-	for i := range all {
-		g := &all[i]
-		g.ID = model.MakeID(g.Key)
-		risk.Assess(g, c.env, fsx.Exists)
-	}
 	c.rep.Grants = all
 }
 
@@ -313,8 +346,11 @@ func (c *collector) activeRules() []model.Grant {
 					continue
 				}
 				inFile[pj] = true
+				// The key depends only on the rule's own file, so removing a copy in
+				// another file does not move this id. User rules keep the plain key
+				// because history snapshots do not name a file.
 				key := model.KeyCodexRule(pj)
-				if seenKey[key] {
+				if f.Scope != model.ScopeUser || seenKey[key] {
 					key += "|" + f.Path
 				}
 				seenKey[key] = true
@@ -533,10 +569,15 @@ func (c *collector) goneRules(active []model.Grant) []model.Grant {
 		if folder != "" {
 			g.Scope, g.Project = model.ScopeProject, folder
 		}
-		if blocked {
+		res := timeline.Date(c.snapshotObs(pattern, folder))
+		// A later session in the folder without the rule shows it was removed. Only a
+		// rule still present at its last sighting may sit in the unreadable folder.
+		if blocked && res.RemovedAt.Before.IsZero() {
 			g.Status, g.RevokeNote = model.StatusUnknown, "Folder not readable"
 		}
-		res := timeline.Date(c.snapshotObs(pattern, folder))
+		if g.Status == model.StatusGone {
+			g.Removed = res.RemovedAt
+		}
 		g.Granted = res.Granted
 		g.LastSeen = res.LastSeen
 		g.Evidence = res.Evidence
@@ -557,7 +598,7 @@ func (c *collector) limitFolder(cwds []string) (folder string, blocked bool) {
 	}
 	containsAll := func(dir string) bool {
 		for _, w := range cwds {
-			if !under(w, dir) {
+			if !fsx.Within(w, dir) {
 				return false
 			}
 		}
@@ -592,10 +633,10 @@ func (c *collector) trustGrants() []model.Grant {
 			Value: t.Path, Scope: model.ScopeUser, Status: model.StatusActive, Revocable: true,
 			Location: model.Location{File: c.cfgPath, Pointer: `projects."` + t.Path + `".trust_level`, Line: t.Line},
 		}
-		if fsx.Exists(t.Path) {
-			g.RevokeNote = `Sets trust_level to "untrusted". ` + restartNote
-		} else {
+		if trustPathGone(t.Path) {
 			g.RevokeNote = "Removes the entry. " + restartNote
+		} else {
+			g.RevokeNote = `Sets trust_level to "untrusted". ` + restartNote
 		}
 		c.dateTrust(&g, true)
 		out = append(out, g)
@@ -619,6 +660,10 @@ func (c *collector) trustGrants() []model.Grant {
 				Value: p, Scope: model.ScopeUser, Status: model.StatusGone, RevokeNote: "Already removed",
 			}
 			c.dateTrust(&g, false)
+			if c.cfgBad {
+				// The config was not read, so the folder may still be trusted.
+				g.Status, g.RevokeNote, g.Removed = model.StatusUnknown, "File not readable", model.Window{}
+			}
 			goneG = append(goneG, g)
 		}
 	}
@@ -636,12 +681,17 @@ func (c *collector) dateTrust(g *model.Grant, active bool) {
 	var last time.Time
 	for i := range c.sessions {
 		s := &c.sessions[i]
-		if !under(s.F.Cwd, path) {
+		if !fsx.Within(s.F.Cwd, path) {
 			continue
 		}
-		sessions++
+		if s.F.Source != "subagent" {
+			sessions++ // a subagent rollout belongs to its parent's session
+		}
 		if t := lastTime(s.F); t.After(last) {
 			last = t
+		}
+		if ownedBelow(s.F.Cwd, path, c.trustSet) {
+			continue // trust on a parent does not start with a session in a trusted child
 		}
 		if !s.F.Start.IsZero() && (first == nil || s.F.Start.Before(first.F.Start)) {
 			first = s
@@ -664,6 +714,7 @@ func (c *collector) dateTrust(g *model.Grant, active bool) {
 	g.Evidence = res.Evidence
 	if !active {
 		g.LastSeen = res.LastSeen
+		g.Removed = res.RemovedAt
 	}
 	g.Usage = model.Usage{Known: true, Count: sessions, Last: last, Since: c.since}
 }
@@ -673,4 +724,20 @@ func lastTime(f RolloutFacts) time.Time {
 		return f.End
 	}
 	return f.Start
+}
+
+// ownedBelow reports whether a trusted folder lies between p and dir, dir excluded.
+func ownedBelow(p, dir string, trusted map[string]bool) bool {
+	dir = filepath.Clean(dir)
+	for q := filepath.Clean(p); q != dir; {
+		if trusted[q] {
+			return true
+		}
+		up := filepath.Dir(q)
+		if up == q {
+			break
+		}
+		q = up
+	}
+	return false
 }
