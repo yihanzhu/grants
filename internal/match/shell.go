@@ -48,10 +48,14 @@ func shellScript(cmd []string) (string, bool) {
 	}
 	for i := 1; i < len(cmd)-1; i++ {
 		a := cmd[i]
-		if !strings.HasPrefix(a, "-") {
+		if !strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "+") {
 			return "", false
 		}
-		if strings.HasPrefix(a, "--") {
+		if a == "-o" || a == "+o" || a == "-O" || a == "+O" || a == "--rcfile" || a == "--init-file" {
+			i++ // the option takes a value, which is not the script
+			continue
+		}
+		if strings.HasPrefix(a, "--") || strings.HasPrefix(a, "+") {
 			continue
 		}
 		if strings.Contains(a, "c") {
@@ -127,15 +131,23 @@ func split(line string) [][]string {
 				i = skipHeredocs(rs, i+1, heredocs) - 1
 				heredocs = nil
 			}
-		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')':
+		case c == ';' || c == '|' || c == '&' || c == '(' || c == ')' || c == '`':
 			if c == '&' && tok.Len() > 0 && strings.HasSuffix(tok.String(), ">") { // 2>&1, >&2
 				tok.WriteRune(c)
 				continue
 			}
+			if c == '(' && (tok.String() == "<" || tok.String() == ">") { // process substitution <(cmd)
+				tok.Reset()
+				inTok = false
+			}
 			flushCmd()
 		case c == ' ' || c == '\t' || c == '\r':
 			flushTok()
-		case c == '<' && i+1 < len(rs) && rs[i+1] == '<' && !(i+2 < len(rs) && rs[i+2] == '<'):
+		case c == '<' && i+2 < len(rs) && rs[i+1] == '<' && rs[i+2] == '<': // here-string: the next word is its input
+			flushTok()
+			cur = append(cur, "<")
+			i += 2
+		case c == '<' && i+1 < len(rs) && rs[i+1] == '<':
 			flushTok()
 			i += 2
 			strip := false
@@ -206,24 +218,32 @@ func strip(tokens []string) []string {
 		out = append(out, t)
 	}
 	for len(out) > 0 {
+		w := wrapperName(out[0])
 		switch {
 		case isAssignment(out[0]):
 			out = out[1:]
-		case out[0] == "nohup" || out[0] == "time" || out[0] == "command" || out[0] == "builtin":
+		case w == "nohup" || w == "time" || w == "command" || w == "builtin":
 			out = out[1:]
-		case out[0] == "env":
+		case syntaxWords[w]: // if/then/do/{ ... : the command follows
+			out = out[1:]
+		case blockWords[w]: // for x in ...; case ...: a header, not a command
+			return nil
+		case w == "env":
 			out = out[1:]
 			for len(out) > 0 && (isAssignment(out[0]) || strings.HasPrefix(out[0], "-")) {
+				if (out[0] == "-u" || out[0] == "-C") && len(out) > 1 {
+					out = out[1:]
+				}
 				out = out[1:]
 			}
-		case out[0] == "nice":
+		case w == "nice":
 			out = out[1:]
 			if len(out) > 1 && out[0] == "-n" {
 				out = out[2:]
 			} else if len(out) > 0 && strings.HasPrefix(out[0], "-") {
 				out = out[1:]
 			}
-		case out[0] == "timeout":
+		case w == "timeout":
 			out = out[1:]
 			for len(out) > 0 && strings.HasPrefix(out[0], "-") {
 				if (out[0] == "-s" || out[0] == "-k" || out[0] == "--signal" || out[0] == "--kill-after") && len(out) > 1 {
@@ -239,6 +259,22 @@ func strip(tokens []string) []string {
 		}
 	}
 	return out
+}
+
+// syntaxWords are shell keywords that only introduce the real command after them.
+var syntaxWords = map[string]bool{"if": true, "then": true, "else": true, "elif": true, "do": true,
+	"while": true, "until": true, "{": true, "!": true}
+
+// blockWords are keywords whose line holds no command, or only loop and case headers.
+var blockWords = map[string]bool{"fi": true, "done": true, "esac": true, "}": true, "for": true,
+	"select": true, "case": true, "in": true, ";;": true, "function": true}
+
+// wrapperName returns the name used to recognize a wrapper: the base name of a path.
+func wrapperName(t string) string {
+	if strings.Contains(t, "/") && !isAssignment(t) {
+		return path.Base(t)
+	}
+	return t
 }
 
 // redirection reports whether t is a redirection operator, and whether its target is

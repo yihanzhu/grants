@@ -97,21 +97,26 @@ func pathRuleKeys(ns, spec string, base RuleBase) ([]Key, bool) {
 	if strings.ContainsAny(spec, "*?[") {
 		return nil, false
 	}
-	var abs string
-	switch {
-	case strings.HasPrefix(spec, "//"):
-		abs = spec[1:]
-	case spec == "~" || strings.HasPrefix(spec, "~/"):
-		abs = filepath.Join(base.Home, strings.TrimPrefix(spec, "~"))
-	case strings.HasPrefix(spec, "/"):
-		abs = filepath.Join(base.Settings, spec)
-	default:
-		abs = filepath.Join(base.Project, spec)
-	}
+	abs := ResolvePath(spec, base)
 	if dirGlob {
 		return []Key{DirKey(ns, abs)}, true
 	}
 	return []Key{FileKey(ns, abs), DirKey(ns, abs)}, true
+}
+
+// ResolvePath turns the path in a Claude Read/Edit/Write rule into an absolute path:
+// "//x" is absolute, "~/x" is under Home, "/x" is under Settings, anything else is
+// under Project. Glob characters are kept as they are.
+func ResolvePath(spec string, base RuleBase) string {
+	switch {
+	case strings.HasPrefix(spec, "//"):
+		return spec[1:]
+	case spec == "~" || strings.HasPrefix(spec, "~/"):
+		return filepath.Join(base.Home, strings.TrimPrefix(spec, "~"))
+	case strings.HasPrefix(spec, "/"):
+		return filepath.Join(base.Settings, spec)
+	}
+	return filepath.Join(base.Project, spec)
 }
 
 // CodexPatternKeys returns the prefix keys of a Codex prefix_rule pattern. Each
