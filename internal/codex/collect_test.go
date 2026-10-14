@@ -344,10 +344,10 @@ func TestCollectRules(t *testing.T) {
 		texts = append(texts, n.Text)
 	}
 	all := strings.Join(texts, "\n")
-	if !strings.Contains(all, "1 statements in Codex rules files could not be parsed") {
+	if !strings.Contains(all, "1 statement in Codex rules files could not be parsed") {
 		t.Errorf("notes = %q", all)
 	}
-	if f.rootBlocksVault && !strings.Contains(all, "1 trusted folders could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.") {
+	if f.rootBlocksVault && !strings.Contains(all, "1 trusted folder could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.") {
 		t.Errorf("notes = %q", all)
 	}
 }

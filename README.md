@@ -27,27 +27,29 @@ grants
 The summary below comes from a made-up home folder.
 
 ```text
-grants: 13 active grants across 2 agents. 5 need a look. 4 point to deleted paths.
+grants: 13 active grants across 2 agents. 4 need a look. 4 point to deleted paths.
 
                       rules   trusted folders   high risk   removed
 Claude Code   5 (1 deleted)     2 (1 deleted)           3         0
 Codex         4 (1 deleted)     2 (1 deleted)           2         0
 
 Needs a look
-  081de94  claude-code  Bash(curl -H 'Aut…//example.com/x)  high · one-off · never used · curl to …
-  c7efbee  claude-code  Bash(make:*)                        high · last used 2026-10-03 · any subc…
-  0978ed3  claude-code  Bash(git push:*)                    high · never used · pushes code to a r…
-  642865d  codex        curl -L 'https://…ple.com/a/b?x=1'  high · one-off · last used 2026-06-01 …
-  7bdf7c2  codex        git push                            high · never used · pushes code to a r…
+  f74bd7d  claude-code  Bash(curl -H 'Authorization: [redacted]' https://example.com/x)  high · one-off · never used · curl to …
+  f2b6f3d  claude-code  Bash(make:*)                                                     high · last used 2026-10-03 · any subc…
+  c9751cd  claude-code  Bash(git push:*)                                                 high · never used · pushes code to a r…
+  7bdf7c2  codex        git push                                                         high · never used · pushes code to a r…
 
 Clean up
   4 grants point to deleted paths: grants revoke --dead
+  2 one-off rules, approved for a single URL or script: grants revoke --one-off
+  2 grants not used in 90 days: grants revoke --unused
   Files are backed up first. Preview with --dry-run. Undo with grants undo.
-  3 grants were not used in 90 days: grants list --flag unused
 
 History covers Claude Code from 2026-06-01 and Codex from 2026-06-01.
-Next: grants show 081de94 · grants revoke 081de94 · grants log
+Next: grants show f74bd7d · grants revoke f74bd7d · grants log
 ```
+
+"Needs a look" lists grants that are high risk or hold a credential. "Clean up" lists the bulk commands. Each grant is counted in the first list that fits.
 
 Look at one grant, preview its removal, then remove it:
 
@@ -79,20 +81,20 @@ Dry run. Nothing was changed.
 | `grants` | Summary: what you granted, what needs a look, how to clean up |
 | `grants list` | Table of grants. Flags: `--agent`, `--kind rule\|trust`, `--all`, `--risk`, `--flag`, `--json` |
 | `grants show <id>` | One grant with its evidence timeline. `--json` |
-| `grants log` | Granted, removed, revoked and undone, newest first. `--agent`, `--since`, `--json` |
-| `grants revoke <id>...` | Remove grants. `--dead` picks every grant that points to a deleted path. `--dry-run`, `--yes` |
+| `grants log` | Granted, removed, revoked and undone, newest first. Grants with no known date follow in their own section. `--agent`, `--since`, `--all`, `--json` |
+| `grants revoke <id>...` | Remove grants. Selectors: `--dead` (points to a deleted path), `--one-off` (approved for a single URL or script), `--unused [days]` (no use in the window). They combine with each other and with ids. `--dry-run`, `--yes` |
 | `grants undo` | Restore the files changed by the latest revoke. `--force` |
 | `grants scan` | Read the history and show what it covers and how long it took |
 | `grants version` | Print the version |
 
-Every command also takes `--no-color`, `--unused <days>` (default 90) and `--no-cache`. Run `grants help <command>` for details. Exit codes: 0 success, 1 error, 2 usage error.
+Every command also takes `--no-color`, `--unused <days>` (default 90) and `--no-cache`. With `revoke`, `--unused` also picks the grants that were not used for that long. Run `grants help <command>` for details. Exit codes: 0 success, 1 error, 2 usage error.
 
 ## How it works
 
 - **Grants.** A grant is a rule (an allowed command or tool) or a trusted folder. Each one is `active`, `gone` (seen before, removed since) or `unknown` (the file that may hold it cannot be read).
-- **Dating.** Agents do not record when you approved something. grants rebuilds the date from the agent's own history: settings backups, session snapshots, first sessions in a folder and file times. It also keeps its own record from the first run on. A date can be a range, or "before" a day. The output says so.
+- **Dating.** Agents do not record when you approved something. grants rebuilds the date from the agent's own history: settings backups, session snapshots, first sessions in a folder and file times. It also keeps its own record from the first run on. A date can be a range or an estimate (`~`). When no history shows a lower bound, `grants log` lists the grant under "Dates unknown" with the day it was first seen.
 - **Usage.** grants matches each command and tool call in history against your rules. It stores hashed keys, not command text. A grant is flagged `unused` when history covers the whole window and nothing matched.
-- **Risk.** Each grant is `high`, `medium` or `low`, with reasons. Flags: `dead-path`, `one-off`, `unused`, `secret`, `committed`.
+- **Risk.** Each grant is `high`, `medium` or `low`, with reasons. A trusted folder that holds three or more projects is broad: high for Codex, medium for Claude Code. Flags: `dead-path`, `one-off`, `unused`, `secret`, `committed`.
 
 The full design is in [docs/design.md](docs/design.md).
 

@@ -461,3 +461,43 @@ func TestOddInputsNeverPanic(t *testing.T) {
 	}
 	Assess(codexRule(big...), testEnv, always)
 }
+
+func TestAssessBroadTrust(t *testing.T) {
+	trust := func(agent model.Agent) *model.Grant {
+		g := &model.Grant{Agent: agent, Kind: model.KindTrust, Value: "/work", Scope: model.ScopeUser}
+		Assess(g, testEnv, existsOnly("/work"))
+		return g
+	}
+	cx := trust(model.Codex)
+	AssessBroadTrust(cx, 3)
+	if cx.Risk.Level != model.RiskHigh || len(cx.Risk.Reasons) != 1 || cx.Risk.Reasons[0] != "every project inside inherits trust (3 projects)" {
+		t.Errorf("codex: %+v", cx.Risk)
+	}
+	cl := trust(model.ClaudeCode)
+	AssessBroadTrust(cl, 5)
+	if cl.Risk.Level != model.RiskMedium || len(cl.Risk.Reasons) != 1 || cl.Risk.Reasons[0] != "folders inside it share this trust (5 projects)" {
+		t.Errorf("claude: %+v", cl.Risk)
+	}
+
+	// Fewer than three projects change nothing.
+	few := trust(model.Codex)
+	AssessBroadTrust(few, 2)
+	if few.Risk.Level != model.RiskLow || few.Risk.Reasons[0] != "limited to one folder" {
+		t.Errorf("two projects: %+v", few.Risk)
+	}
+	// A higher level stays, and the new reason joins only when it matches that level.
+	home := &model.Grant{Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/home/u", Scope: model.ScopeUser}
+	Assess(home, testEnv, always)
+	AssessBroadTrust(home, 4)
+	if home.Risk.Level != model.RiskHigh || len(home.Risk.Reasons) != 1 {
+		t.Errorf("home: %+v", home.Risk)
+	}
+	// Rules are not trusted folders.
+	rule := claudeRule("Bash(ls:*)", "", model.ScopeUser)
+	Assess(rule, testEnv, always)
+	before := rule.Risk
+	AssessBroadTrust(rule, 9)
+	if rule.Risk.Level != before.Level || len(rule.Risk.Reasons) != len(before.Reasons) {
+		t.Errorf("rule changed: %+v", rule.Risk)
+	}
+}

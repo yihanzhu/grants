@@ -85,13 +85,14 @@ func mustNotContain(t *testing.T, out string, parts ...string) {
 
 func TestSummary(t *testing.T) {
 	newHome(t)
+	t.Setenv("COLUMNS", "150")
 	code, out, errs := run(t, "")
 	if code != 0 || errs != "" {
 		t.Fatalf("code=%d stderr=%q", code, errs)
 	}
 	lines := strings.Split(out, "\n")
 	// The result comes first.
-	if want := "grants: 13 active grants across 2 agents. 5 need a look. 4 point to deleted paths."; lines[0] != want {
+	if want := "grants: 13 active grants across 2 agents. 4 need a look. 4 point to deleted paths."; lines[0] != want {
 		t.Errorf("first line = %q, want %q", lines[0], want)
 	}
 	mustContain(t, out,
@@ -101,14 +102,18 @@ func TestSummary(t *testing.T) {
 		"Needs a look",
 		"Clean up",
 		"4 grants point to deleted paths: grants revoke --dead",
-		"3 grants were not used in 90 days: grants list --flag unused",
+		"2 one-off rules, approved for a single URL or script: grants revoke --one-off",
+		"2 grants not used in 90 days: grants revoke --unused",
+		"Files are backed up first. Preview with --dry-run. Undo with grants undo.",
 		"History covers Claude Code from 2026-06-01 and Codex from 2026-06-01.",
 		"Next: grants show ",
 	)
 	// Dead-path grants are cleaned up, not listed under "Needs a look".
 	look := out[strings.Index(out, "Needs a look"):strings.Index(out, "Clean up")]
 	mustNotContain(t, look, "notes", "gone", "missing")
-	mustContain(t, look, "never used", "last used 2026-10-03", "one-off", "pushes code to a remote")
+	mustContain(t, look, "never used", "last used 2026-10-03", "pushes code to a remote")
+	// One-off rules (other than the one with a credential) are cleaned up, not listed.
+	mustNotContain(t, look, "https://example.com/a/b")
 	// The credential never reaches the screen.
 	mustNotContain(t, out, "abcdefghij0123456789")
 	// A secret comes before plain high-risk grants.
@@ -130,7 +135,7 @@ func TestSummaryLimitsLookList(t *testing.T) {
 	f.WriteString(sb.String())
 	f.Close()
 	_, out, _ := run(t, "")
-	mustContain(t, out, "+9 more: grants list --risk high")
+	mustContain(t, out, "+8 more: grants list --risk high")
 	if n := strings.Count(out[strings.Index(out, "Needs a look"):strings.Index(out, "Clean up")], "\n  "); n != 11 {
 		t.Errorf("list lines = %d, want 10 grants and the +more line", n)
 	}
@@ -280,7 +285,7 @@ func TestShow(t *testing.T) {
 	}
 
 	// A rule that the agent asked for shows why.
-	_, out, _ = run(t, "", "show", m["codex rule curl -L 'https://example.com/a/b?x=1'"])
+	_, out, _ = run(t, "", "show", m["codex rule curl -L https://example.com/a/b?x=1"])
 	mustContain(t, out, "one-off:", "Granted   ~2026-06-01 (approved when the agent asked)", "proposed", "download the report")
 
 	// The credential is hidden everywhere.
@@ -329,20 +334,42 @@ func TestLogAndScan(t *testing.T) {
 	if code != 0 {
 		t.Fatal(code)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 13 {
-		t.Errorf("log has %d lines, want 13 granted events:\n%s", len(lines), out)
+	// Grants whose file has no birth time (not macOS) only show "existed by", so the
+	// split between dated events and the unknown-date section depends on the system.
+	var all []event
+	_, js, _ := run(t, "", "log", "--json")
+	if err := json.Unmarshal([]byte(js), &all); err != nil || len(all) != 13 {
+		t.Fatalf("log --json: %v, %d events", err, len(all))
 	}
+	undated := 0
+	for _, e := range all {
+		if e.ExistenceOnly {
+			undated++
+		}
+	}
+	const title = "Dates unknown; these existed by:"
+	datedPart, rest, hasSection := strings.Cut(out, title)
+	if hasSection != (undated > 0) {
+		t.Errorf("section = %v with %d existence-only events:\n%s", hasSection, undated, out)
+	}
+	if n := len(strings.Split(strings.TrimSpace(datedPart), "\n")); n != 13-undated {
+		t.Errorf("%d dated lines, want %d:\n%s", n, 13-undated, out)
+	}
+	_ = rest
 	sq := squash(out)
 	mustContain(t, sq,
-		window(h.claudeProj, "2026-08-20", "2026-09-01")+" claude-code granted Bash(make:*) (settings file last changed)",
 		"~2026-06-01 claude-code granted ~/work/app (first Claude Code session in this folder)",
-		window(h.codexRules, "2026-05-01", "2026-06-01")+" codex granted git push (Codex session snapshot)",
-		"~2026-06-01 codex granted curl -L 'https://example.com/a/b?x=1' (approved when the agent asked)",
+		"~2026-06-01 codex granted curl -L https://example.com/a/b?x=1 (approved when the agent asked)",
 	)
-	// Newest first.
-	if !strings.HasPrefix(lines[0], "before 2026-10-13") {
-		t.Errorf("order:\n%s", out)
+	if hasBirth(h.claudeProj) && hasBirth(h.codexRules) {
+		mustContain(t, sq,
+			"2026-08-20..2026-09-01 claude-code granted Bash(make:*) (settings file last changed)",
+			"2026-05-01..2026-06-01 codex granted git push (Codex session snapshot)",
+		)
+		// Newest first, and the grant that grants only saw today is not among the dated events.
+		if !strings.HasPrefix(out, "2026-08-20..2026-09-01") || strings.Contains(datedPart, "first seen by grants") {
+			t.Errorf("order:\n%s", out)
+		}
 	}
 
 	_, out, _ = run(t, "", "log", "--agent", "codex", "--since", "2026-07-01")

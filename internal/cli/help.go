@@ -22,7 +22,8 @@ Usage: grants [command] [flags]
 var usages = map[string]string{
 	"summary": `Usage: grants
 
-Shows how many grants you have, which ones need a look, and the command to clean up.
+Shows how many grants you have, which ones need a look (high risk or a credential),
+and the commands that clean up in bulk: deleted paths, one-off rules, unused grants.
 ` + globalFlags,
 	"list": `Usage: grants list [flags]
 
@@ -45,21 +46,31 @@ evidence for its date. An id can be shortened to 4 characters if it stays unique
 
 Shows what happened to grants, newest first: granted, removed, revoked, undone.
 
+Some grants have no known date. No history shows when they were given, only that they
+existed by a day (the day grants first saw them, or when their file last changed).
+grants log lists them in a separate section, one line per day. --all lists each one.
+
 Flags:
   --agent NAME       claude-code or codex
   --since YYYY-MM-DD only events on or after this day
-  --json             print JSON
+  --all              list every grant whose date is unknown, not one line per day
+  --json             print JSON (existence_only marks events with no known date)
 ` + globalFlags,
 	"revoke": `Usage: grants revoke <id>... [flags]
-       grants revoke --dead [flags]
+       grants revoke --dead | --one-off | --unused [DAYS] [flags]
 
 Removes grants from the agent config files. grants shows the plan, then asks.
 Each file is backed up first. grants undo puts the files back.
 
+The selectors pick active grants that grants can edit. They combine with each other
+and with ids; a grant that matches several is revoked once.
+
 Flags:
-  --dead      revoke every grant that points to a deleted path
-  --dry-run   show the plan and stop
-  --yes       do not ask
+  --dead          revoke every grant that points to a deleted path
+  --one-off       revoke every rule approved for a single URL, script or long command
+  --unused [DAYS] revoke every grant with no use in the last DAYS days (default 90)
+  --dry-run       show the plan and stop
+  --yes           do not ask
 ` + globalFlags,
 	"undo": `Usage: grants undo [--force]
 

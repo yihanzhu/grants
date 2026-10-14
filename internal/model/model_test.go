@@ -46,3 +46,17 @@ func TestMakeID(t *testing.T) {
 		t.Errorf("MakeID = %q", got)
 	}
 }
+
+func TestPlural(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{0, "0 grants"}, {1, "1 grant"}, {2, "2 grants"}, {1234, "1,234 grants"}} {
+		if got := Plural(c.n, "grant", "grants"); got != c.want {
+			t.Errorf("Plural(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+	if got := Commas(-1234567); got != "-1,234,567" {
+		t.Errorf("Commas = %q", got)
+	}
+}

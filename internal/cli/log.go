@@ -23,6 +23,9 @@ type event struct {
 	GrantID string    `json:"grant_id,omitempty"`
 	Grant   string    `json:"grant"`
 	Detail  string    `json:"detail,omitempty"`
+	// ExistenceOnly marks a granted event with no lower bound and no estimate: all we
+	// know is that the grant existed by Time. Time is then not when it was given.
+	ExistenceOnly bool `json:"existence_only,omitempty"`
 }
 
 func (a *app) cmdLog(args []string) int {
@@ -31,12 +34,14 @@ func (a *app) cmdLog(args []string) int {
 		agent string
 		since string
 		asJS  bool
+		all   bool
 	)
 	fs := flag.NewFlagSet("log", flag.ContinueOnError)
 	g.register(fs)
 	fs.StringVar(&agent, "agent", "", "")
 	fs.StringVar(&since, "since", "", "")
 	fs.BoolVar(&asJS, "json", false, "")
+	fs.BoolVar(&all, "all", false, "")
 	rest, code, done := a.parse("log", usages["log"], fs, &g, args)
 	if done {
 		return code
@@ -76,7 +81,7 @@ func (a *app) cmdLog(args []string) int {
 		}
 		return a.printJSON(events)
 	}
-	renderLog(a.stdout, events, a.st, termWidth(a.stdout))
+	renderLog(a.stdout, events, all, a.st, termWidth(a.stdout))
 	return exitOK
 }
 
@@ -120,7 +125,8 @@ func buildEvents(res core.Result, batches []edit.Batch) []event {
 	for _, g := range res.Grants {
 		text := grantText(g, home)
 		if !g.Granted.Before.IsZero() {
-			e := event{Time: g.Granted.Before, Date: fmtWindow(g.Granted), Agent: string(g.Agent), Event: "granted", GrantID: g.ID, Grant: text, Detail: g.Granted.Source}
+			e := event{Time: g.Granted.Before, Date: fmtWindow(g.Granted), Agent: string(g.Agent), Event: "granted", GrantID: g.ID, Grant: text, Detail: g.Granted.Source,
+				ExistenceOnly: g.Granted.After.IsZero() && !g.Granted.Approx}
 			events = append(events, e)
 		}
 		if g.Status != model.StatusGone || revoked[g.ID] {
@@ -166,19 +172,50 @@ func filterEvents(events []event, agent string, from time.Time) []event {
 	return out
 }
 
-func renderLog(w io.Writer, events []event, st style, termW int) {
+// samplesPerDay is how many grants one "dates unknown" line names.
+const samplesPerDay = 3
+
+// renderLog prints the events with a date, newest first. Events that only show a grant
+// existed by some day follow in their own section: one line per day, or one per grant
+// with all.
+func renderLog(w io.Writer, events []event, all bool, st style, termW int) {
 	if len(events) == 0 {
 		fmt.Fprintln(w, "Nothing to show yet.")
 		return
 	}
-	dateW, agentW, evW := 0, 0, 0
+	var dated, undated []event
+	for _, e := range events {
+		if e.ExistenceOnly {
+			undated = append(undated, e)
+		} else {
+			dated = append(dated, e)
+		}
+	}
+	renderDated(w, dated, st, termW)
+	if len(undated) == 0 {
+		return
+	}
+	if len(dated) > 0 {
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w, st.bold("Dates unknown; these existed by:"))
+	if all {
+		renderUndatedAll(w, undated, st, termW)
+		return
+	}
+	renderUndatedByDay(w, undated, st, termW)
+}
+
+func renderDated(w io.Writer, events []event, st style, termW int) {
+	dateW, agentW, evW, grantMax := 0, 0, 0, 0
 	for _, e := range events {
 		dateW = max(dateW, width(e.Date))
 		agentW = max(agentW, width(e.Agent))
 		evW = max(evW, width(e.Event))
+		grantMax = max(grantMax, width(e.Grant))
 	}
 	prefix := dateW + 2 + agentW + 2 + evW + 2
-	grantW := min(max(termW-prefix-30, 24), 60)
+	grantW := min(max(termW-prefix-30, 24), max(grantMax, 24))
 	for _, e := range events {
 		detail := ""
 		if e.Detail != "" {
@@ -193,6 +230,68 @@ func renderLog(w io.Writer, events []event, st style, termW int) {
 		case "removed":
 			name = st.dim(name)
 		}
-		fmt.Fprintf(w, "%s  %s  %s  %s%s\n", padRight(e.Date, dateW), padRight(e.Agent, agentW), name, truncMiddle(e.Grant, grantW), detail)
+		fmt.Fprintf(w, "%s  %s  %s  %s%s\n", padRight(e.Date, dateW), padRight(e.Agent, agentW), name, shortenValue(e.Grant, grantW), detail)
+	}
+}
+
+// renderUndatedAll lists each grant of the undated section on its own line.
+func renderUndatedAll(w io.Writer, events []event, st style, termW int) {
+	agentW, grantMax := 0, 0
+	for _, e := range events {
+		agentW = max(agentW, width(e.Agent))
+		grantMax = max(grantMax, width(e.Grant))
+	}
+	const dateW = 10
+	grantW := min(max(termW-(2+dateW+2+agentW+2)-30, 24), max(grantMax, 24))
+	for _, e := range events {
+		detail := ""
+		if e.Detail != "" {
+			detail = "  " + st.dim("("+truncEnd(oneLine(e.Detail), 70)+")")
+		}
+		fmt.Fprintf(w, "  %s  %s  %s%s\n", fmtDate(e.Time), padRight(e.Agent, agentW), shortenValue(e.Grant, grantW), detail)
+	}
+}
+
+// renderUndatedByDay prints one line per day: how many grants existed by then, and a
+// few of them.
+func renderUndatedByDay(w io.Writer, events []event, st style, termW int) {
+	type day struct {
+		date   string
+		grants []string
+	}
+	var days []*day // events come newest first, so the days do too
+	byDate := map[string]*day{}
+	for _, e := range events {
+		d := fmtDate(e.Time)
+		if byDate[d] == nil {
+			byDate[d] = &day{date: d}
+			days = append(days, byDate[d])
+		}
+		byDate[d].grants = append(byDate[d].grants, e.Grant)
+	}
+	countW := 0
+	for _, d := range days {
+		countW = max(countW, width(plural(len(d.grants), "grant", "grants")))
+	}
+	hidden := false
+	for _, d := range days {
+		shown := d.grants
+		if len(shown) > samplesPerDay {
+			shown, hidden = shown[:samplesPerDay], true
+		}
+		prefix := 2 + 10 + 2 + countW + 2
+		each := max((termW-prefix)/len(shown)-3, 12)
+		names := make([]string, len(shown))
+		for i, g := range shown {
+			names[i] = shortenValue(g, each)
+		}
+		text := strings.Join(names, " · ")
+		if more := len(d.grants) - len(shown); more > 0 {
+			text += fmt.Sprintf(" · +%d more", more)
+		}
+		fmt.Fprintf(w, "  %s  %s  %s\n", d.date, padRight(plural(len(d.grants), "grant", "grants"), countW), text)
+	}
+	if hidden {
+		fmt.Fprintf(w, "  %s\n", st.dim("grants log --all lists each one."))
 	}
 }

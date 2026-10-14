@@ -1,6 +1,6 @@
 //go:build darwin || linux || freebsd || netbsd || openbsd || dragonfly
 
-package edit
+package fsx
 
 import (
 	"fmt"
@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-// lockDir takes an exclusive lock on path so two grants processes never edit and
-// journal at the same time. It waits up to ten seconds.
-func lockDir(path string) (unlock func(), err error) {
+// Lock takes an exclusive lock on the file at path so two grants processes never
+// write the same state at the same time. It waits up to ten seconds.
+func Lock(path string) (unlock func(), err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("edit: open lock: %w", err)
+		return nil, fmt.Errorf("fsx: open lock: %w", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -27,11 +27,11 @@ func lockDir(path string) (unlock func(), err error) {
 		}
 		if err != syscall.EWOULDBLOCK && err != syscall.EINTR {
 			f.Close()
-			return nil, fmt.Errorf("edit: lock %s: %w", path, err)
+			return nil, fmt.Errorf("fsx: lock %s: %w", path, err)
 		}
 		if time.Now().After(deadline) {
 			f.Close()
-			return nil, fmt.Errorf("edit: another grants process holds the lock %s", path)
+			return nil, fmt.Errorf("fsx: another grants process holds the lock %s", path)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

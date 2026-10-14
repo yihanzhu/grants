@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/yihanzhu/grants/internal/fsx"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -104,7 +105,7 @@ func Apply(stateDir string, now time.Time, changes []Change) (Batch, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return Batch{}, fmt.Errorf("edit: create state folder: %w", err)
 	}
-	unlock, err := lockDir(filepath.Join(stateDir, "lock"))
+	unlock, err := fsx.Lock(filepath.Join(stateDir, "lock"))
 	if err != nil {
 		return Batch{}, err
 	}
@@ -180,7 +181,7 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 	if _, err := os.Stat(stateDir); errors.Is(err, fs.ErrNotExist) {
 		return Batch{}, ErrNothingToUndo
 	}
-	unlock, err := lockDir(filepath.Join(stateDir, "lock"))
+	unlock, err := fsx.Lock(filepath.Join(stateDir, "lock"))
 	if err != nil {
 		return Batch{}, err
 	}

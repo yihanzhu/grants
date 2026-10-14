@@ -39,6 +39,8 @@ func merge(env model.Env, reports []model.Report, obs *store.Observations) []mod
 			g.Flags = append(g.Flags, model.FlagUnused)
 		}
 	}
+	// Broad trusted folders need the whole list, so they come after the loop.
+	markBroadTrust(grants, fsx.Exists, listSubdirs)
 
 	var active []model.Grant
 	reported := map[string]bool{}

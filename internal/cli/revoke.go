@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yihanzhu/grants/internal/edit"
 	"github.com/yihanzhu/grants/internal/model"
@@ -18,22 +20,87 @@ import (
 // such as --dead on a long list, prints one line per grant.
 const fullPlanMax = 8
 
+// unusedFlag is --unused for revoke. Alone it selects the grants flagged unused, with
+// the default window. With a number (--unused=30, or --unused 30) it also sets the
+// window in days, like the --unused flag of the other commands.
+type unusedFlag struct {
+	g        *globals
+	selected bool
+}
+
+func (f *unusedFlag) IsBoolFlag() bool { return true }
+
+func (f *unusedFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strconv.FormatBool(f.selected)
+}
+
+func (f *unusedFlag) Set(s string) error {
+	switch s {
+	case "true":
+		f.selected = true
+	case "false":
+		f.selected = false
+	default:
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return fmt.Errorf("--unused takes a number of days, not %q", s)
+		}
+		f.selected, f.g.unused = true, n
+	}
+	return nil
+}
+
+// joinUnusedDays turns "--unused 30" into "--unused=30". An id is never shorter than 4
+// characters, so a number of 1 to 3 digits after --unused is a window, not an id.
+func joinUnusedDays(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if (a == "--unused" || a == "-unused") && i+1 < len(args) && isShortNumber(args[i+1]) {
+			out = append(out, "--unused="+args[i+1])
+			i++
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func isShortNumber(s string) bool {
+	if len(s) < 1 || len(s) > 3 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *app) cmdRevoke(args []string) int {
 	var (
-		g              globals
-		dead, dry, yes bool
+		g                      globals
+		dead, oneOff, dry, yes bool
+		unusedSel              = unusedFlag{g: &g}
 	)
 	fs := flag.NewFlagSet("revoke", flag.ContinueOnError)
-	g.register(fs)
+	g.registerBase(fs)
 	fs.BoolVar(&dead, "dead", false, "")
+	fs.BoolVar(&oneOff, "one-off", false, "")
+	fs.Var(&unusedSel, "unused", "")
 	fs.BoolVar(&dry, "dry-run", false, "")
 	fs.BoolVar(&yes, "yes", false, "")
-	ids, code, done := a.parse("revoke", usages["revoke"], fs, &g, args)
+	ids, code, done := a.parse("revoke", usages["revoke"], fs, &g, joinUnusedDays(args))
 	if done {
 		return code
 	}
-	if len(ids) == 0 && !dead {
-		fmt.Fprintln(a.stderr, "grants revoke: give a grant id, or use --dead. grants list shows the ids.")
+	unused := unusedSel.selected
+	if len(ids) == 0 && !dead && !oneOff && !unused {
+		fmt.Fprintln(a.stderr, "grants revoke: give a grant id, or use --dead, --one-off or --unused. grants list shows the ids.")
 		return exitUsage
 	}
 	if !dry && !yes && !stdinIsTerminal(a.stdin) {
@@ -59,16 +126,18 @@ func (a *app) cmdRevoke(args []string) int {
 		picked[gr.ID], explicit[gr.ID] = true, true
 		selected = append(selected, gr)
 	}
-	if dead {
-		for _, gr := range res.Grants {
-			if isDead(gr) && !picked[gr.ID] {
-				picked[gr.ID] = true
-				selected = append(selected, gr)
-			}
+	// The selectors add every active, revocable grant that has the flag.
+	for _, gr := range res.Grants {
+		if picked[gr.ID] {
+			continue
+		}
+		if dead && isDead(gr) || oneOff && isOneOff(gr) || unused && isUnused(gr) {
+			picked[gr.ID] = true
+			selected = append(selected, gr)
 		}
 	}
 	if len(selected) == 0 {
-		fmt.Fprintln(a.stdout, "No grants point to deleted paths. Nothing to revoke.")
+		fmt.Fprintln(a.stdout, nothingToRevoke(dead, oneOff, unused, res.Env.UnusedAfter))
 		return exitOK
 	}
 
@@ -113,6 +182,19 @@ func (a *app) cmdRevoke(args []string) int {
 		fmt.Fprintln(a.stdout, note)
 	}
 	return exitOK
+}
+
+// nothingToRevoke says why a selector found no grant.
+func nothingToRevoke(dead, oneOff, unused bool, window time.Duration) string {
+	switch {
+	case dead && !oneOff && !unused:
+		return "No grants point to deleted paths. Nothing to revoke."
+	case oneOff && !dead && !unused:
+		return "No one-off rules found. Nothing to revoke."
+	case unused && !dead && !oneOff:
+		return "No grants were unused for " + daysText(window) + ". Nothing to revoke."
+	}
+	return "No grants match. Nothing to revoke."
 }
 
 // renderPlan prints what a revoke will do.

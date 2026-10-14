@@ -45,8 +45,21 @@ func (a *app) cmdShow(args []string) int {
 // renderShow prints one grant in detail.
 func renderShow(w io.Writer, g model.Grant, res core.Result, st style, termW int) {
 	home := res.Env.Home
+	// A long row wraps under its text. A row with color codes is left alone, since the
+	// codes would count as width.
 	row := func(label, text string) {
-		fmt.Fprintf(w, "%s %s\n", st.dim(padRight(label, 9)), text)
+		lines := []string{text}
+		if !strings.Contains(text, "\x1b") {
+			if wrapped := wrapText(text, max(termW-10, 30)); len(wrapped) > 1 {
+				lines = wrapped
+			}
+		}
+		for i, l := range lines {
+			if i > 0 {
+				label = ""
+			}
+			fmt.Fprintf(w, "%s %s\n", st.dim(padRight(label, 9)), l)
+		}
 	}
 
 	title := grantText(g, home)
@@ -101,14 +114,91 @@ func renderShow(w io.Writer, g model.Grant, res core.Result, st style, termW int
 		for _, e := range g.Evidence {
 			whatW = max(whatW, width(e.What))
 		}
+		// Each line starts with the time and the kind. The detail wraps in the width that
+		// is left, and the source follows it, on its own line when it does not fit. On a
+		// narrow terminal the detail goes below the time instead.
+		prefixW := 2 + 16 + 2 + whatW + 2
+		textW := termW - prefixW
+		stacked := textW < 30
+		pad := strings.Repeat(" ", prefixW)
+		if stacked {
+			pad = "    "
+			textW = max(termW-width(pad), 12)
+		}
 		for _, e := range g.Evidence {
-			text := oneLine(risk.Redact(e.Detail))
-			if e.Source != "" {
-				text += st.dim("  (" + tilde(e.Source, home) + ")")
+			type line struct{ text, src string } // src is the dim "(source)" tail
+			var lines []line
+			for _, t := range wrapText(oneLine(risk.Redact(e.Detail)), textW) {
+				lines = append(lines, line{text: t})
 			}
-			fmt.Fprintf(w, "  %s  %s  %s\n", fmtDateTime(e.Time), padRight(e.What, whatW), text)
+			if e.Source != "" {
+				src := "(" + evidenceSource(e.Source, res.Env) + ")"
+				if n := len(lines); n > 0 && width(lines[n-1].text)+2+width(src) <= textW {
+					lines[n-1].src = "  " + src
+				} else {
+					lines = append(lines, line{src: truncMiddle(src, textW)})
+				}
+			}
+			if len(lines) == 0 {
+				lines = []line{{}}
+			}
+			head := fmt.Sprintf("  %s  %s  ", fmtDateTime(e.Time), padRight(e.What, whatW))
+			if stacked {
+				fmt.Fprintln(w, strings.TrimRight(head, " "))
+				head = pad
+			}
+			for i, l := range lines {
+				lead := pad
+				if i == 0 {
+					lead = head
+				}
+				fmt.Fprintf(w, "%s%s%s\n", lead, l.text, st.dim(l.src))
+			}
 		}
 	}
+}
+
+// evidenceSource shortens an evidence file to a path inside the agent's home folder
+// (sessions/2026/...), or to ~/... for files elsewhere.
+func evidenceSource(src string, env model.Env) string {
+	for _, root := range []string{env.CodexHome, env.ClaudeDir} {
+		if root != "" && strings.HasPrefix(src, root+"/") {
+			return src[len(root)+1:]
+		}
+	}
+	return tilde(src, env.Home)
+}
+
+// wrapText breaks s into lines of at most n characters at spaces. A word longer than
+// a line is cut.
+func wrapText(s string, n int) []string {
+	var lines []string
+	cur := ""
+	flush := func() {
+		if cur != "" {
+			lines = append(lines, cur)
+			cur = ""
+		}
+	}
+	for _, word := range strings.Fields(s) {
+		for width(word) > n {
+			flush()
+			r := []rune(word)
+			lines = append(lines, string(r[:n]))
+			word = string(r[n:])
+		}
+		switch {
+		case cur == "":
+			cur = word
+		case width(cur)+1+width(word) <= n:
+			cur += " " + word
+		default:
+			flush()
+			cur = word
+		}
+	}
+	flush()
+	return lines
 }
 
 func statusText(g model.Grant) string {

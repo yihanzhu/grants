@@ -171,7 +171,7 @@ func (c *collector) readRules() {
 		}
 	}
 	if n := len(c.blocked); n > 0 {
-		c.note("warn", "%d trusted folders could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.", n)
+		c.note("warn", "%s could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.", model.Plural(n, "trusted folder", "trusted folders"))
 	}
 	bad := 0
 	for _, f := range c.files {
@@ -182,7 +182,7 @@ func (c *collector) readRules() {
 		}
 	}
 	if bad > 0 {
-		c.note("warn", "%d statements in Codex rules files could not be parsed and were left out.", bad)
+		c.note("warn", "%s in Codex rules files could not be parsed and %s left out.", model.Plural(bad, "statement", "statements"), map[bool]string{true: "was", false: "were"}[bad == 1])
 	}
 }
 
@@ -212,10 +212,10 @@ func (c *collector) readSessions(opt scan.Options) {
 		}
 	}
 	if stats.Failed > 0 {
-		c.note("warn", "%d Codex session files could not be read.", stats.Failed)
+		c.note("warn", "%s could not be read.", model.Plural(stats.Failed, "Codex session file", "Codex session files"))
 	}
 	if skipped > 0 {
-		c.note("warn", "%d Codex session folders could not be read.", skipped)
+		c.note("warn", "%s could not be read.", model.Plural(skipped, "Codex session folder", "Codex session folders"))
 	}
 	paths := make([]string, 0, len(results))
 	for p := range results {

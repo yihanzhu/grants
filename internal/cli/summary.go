@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,35 +36,68 @@ func (a *app) cmdSummary(args []string) int {
 	return exitOK
 }
 
-// lookRank orders the reasons to look at a grant: secret, high risk, one-off, unused.
+// lookRank orders the reasons to look at a grant: a credential, then high risk.
 func lookRank(g model.Grant) int {
 	switch {
 	case g.HasFlag(model.FlagSecret):
 		return 0
 	case g.Risk.Level == model.RiskHigh:
 		return 1
-	case g.HasFlag(model.FlagOneOff):
-		return 2
-	case g.HasFlag(model.FlagUnused):
-		return 3
 	}
 	return -1
 }
 
-// isDead is a grant that "grants revoke --dead" would remove.
+// A grant that grants revoke can remove in bulk is dead, one-off or unused. The summary
+// counts each grant in the first of these that fits, in this order.
+type cleanup int
+
+const (
+	cleanNone cleanup = iota
+	cleanDead
+	cleanOneOff
+	cleanUnused
+)
+
+// cleanupOf says which clean-up list an active, revocable grant belongs to.
+func cleanupOf(g model.Grant) cleanup {
+	switch {
+	case g.Status != model.StatusActive || !g.Revocable:
+		return cleanNone
+	case g.HasFlag(model.FlagDeadPath):
+		return cleanDead
+	case g.HasFlag(model.FlagOneOff):
+		return cleanOneOff
+	case g.HasFlag(model.FlagUnused):
+		return cleanUnused
+	}
+	return cleanNone
+}
+
+// The selectors of grants revoke. A grant can match several; revoke takes it once.
 func isDead(g model.Grant) bool {
 	return g.Status == model.StatusActive && g.Revocable && g.HasFlag(model.FlagDeadPath)
 }
+func isOneOff(g model.Grant) bool {
+	return g.Status == model.StatusActive && g.Revocable && g.HasFlag(model.FlagOneOff)
+}
+func isUnused(g model.Grant) bool {
+	return g.Status == model.StatusActive && g.Revocable && g.HasFlag(model.FlagUnused)
+}
 
-// needsLook picks active grants that are high risk, hold a secret, look like one-offs
-// or are unused. Grants that point to deleted paths go to the clean-up list instead.
-// Most worrying first, then newest first.
+// needsLook picks active grants that are high risk or hold a secret. A grant that points
+// to a deleted path or looks like a one-off is a clean-up job instead, unless it holds a
+// secret: a credential in a rule is worth seeing by name. Most worrying first, then
+// newest first.
 func needsLook(grants []model.Grant) []model.Grant {
 	var out []model.Grant
 	for _, g := range grants {
-		if g.Status == model.StatusActive && !g.HasFlag(model.FlagDeadPath) && lookRank(g) >= 0 {
-			out = append(out, g)
+		if g.Status != model.StatusActive || lookRank(g) < 0 {
+			continue
 		}
+		if c := cleanupOf(g); (c == cleanDead || c == cleanOneOff) && !g.HasFlag(model.FlagSecret) {
+			continue
+		}
+		out = append(out, g)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if ri, rj := lookRank(out[i]), lookRank(out[j]); ri != rj {
@@ -148,18 +182,16 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 	ts := tallies(res)
 	order := []model.Agent{model.ClaudeCode, model.Codex}
 
-	active, dead, unused, agents := 0, 0, 0, 0
+	active, agents := 0, 0
+	var clean [cleanUnused + 1]int
 	for _, g := range res.Grants {
 		if g.Status != model.StatusActive {
 			continue
 		}
 		active++
-		if isDead(g) {
-			dead++
-		} else if g.HasFlag(model.FlagUnused) && !g.HasFlag(model.FlagDeadPath) {
-			unused++
-		}
+		clean[cleanupOf(g)]++
 	}
+	dead := clean[cleanDead]
 	for _, ag := range order {
 		if t := ts[ag]; t != nil && t.found {
 			agents++
@@ -178,16 +210,18 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 		fmt.Fprintln(w, st.bold(fmt.Sprintf("grants: no active grants across %s.", plural(agents, "agent", "agents"))))
 	default:
 		parts := []string{fmt.Sprintf("%s across %s.", plural(active, "active grant", "active grants"), plural(agents, "agent", "agents"))}
-		if len(look) == 0 {
+		switch len(look) {
+		case 0:
 			parts = append(parts, "Nothing needs a look.")
-		} else if len(look) == 1 {
+		case 1:
 			parts = append(parts, "1 needs a look.")
-		} else {
+		default:
 			parts = append(parts, fmt.Sprintf("%s need a look.", commas(len(look))))
 		}
-		if dead == 1 {
+		switch {
+		case dead == 1:
 			parts = append(parts, "1 points to a deleted path.")
-		} else if dead > 1 {
+		case dead > 1:
 			parts = append(parts, fmt.Sprintf("%s point to deleted paths.", commas(dead)))
 		}
 		fmt.Fprintln(w, st.bold("grants:")+" "+strings.Join(parts, " "))
@@ -247,25 +281,28 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 		}
 	}
 
-	// The one command to clean up.
-	if dead > 0 || unused > 0 {
+	// The bulk commands. Each grant is in the first list that fits.
+	if clean[cleanDead]+clean[cleanOneOff]+clean[cleanUnused] > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, st.bold("Clean up"))
-		if dead > 0 {
-			noun := "grants point to deleted paths"
-			if dead == 1 {
-				noun = "grant points to a deleted path"
+		if n := clean[cleanDead]; n > 0 {
+			text := commas(n) + " grants point to deleted paths"
+			if n == 1 {
+				text = "1 grant points to a deleted path"
 			}
-			fmt.Fprintf(w, "  %s %s: %s\n", commas(dead), noun, st.bold("grants revoke --dead"))
-			fmt.Fprintf(w, "  %s\n", st.dim("Files are backed up first. Preview with --dry-run. Undo with grants undo."))
+			fmt.Fprintf(w, "  %s: %s\n", text, st.bold("grants revoke --dead"))
 		}
-		if unused > 0 {
-			noun := "grants were not used"
-			if unused == 1 {
-				noun = "grant was not used"
+		if n := clean[cleanOneOff]; n > 0 {
+			fmt.Fprintf(w, "  %s, approved for a single URL or script: %s\n", plural(n, "one-off rule", "one-off rules"), st.bold("grants revoke --one-off"))
+		}
+		if n := clean[cleanUnused]; n > 0 {
+			cmd := "grants revoke --unused"
+			if res.Env.UnusedAfter != core.DefaultUnusedAfter {
+				cmd += " " + strconv.Itoa(int(res.Env.UnusedAfter/(24*time.Hour)))
 			}
-			fmt.Fprintf(w, "  %s %s in %s: grants list --flag unused\n", commas(unused), noun, daysText(res.Env.UnusedAfter))
+			fmt.Fprintf(w, "  %s not used in %s: %s\n", plural(n, "grant", "grants"), daysText(res.Env.UnusedAfter), st.bold(cmd))
 		}
+		fmt.Fprintf(w, "  %s\n", st.dim("Files are backed up first. Preview with --dry-run. Undo with grants undo."))
 	}
 
 	fmt.Fprintln(w)
@@ -295,11 +332,12 @@ func renderLook(w io.Writer, list []model.Grant, res core.Result, st style, term
 	for _, g := range list {
 		agentW = max(agentW, width(string(g.Agent)))
 	}
-	// Keep at least 24 characters for the reasons, and 12 for the grant.
-	grantW = min(grantW, 34, max(termW-(2+idW+2+agentW+2+2)-24, 12))
+	// The grant gets the width first, but a very long one must leave 40 characters for
+	// the reasons (the longest usual run is about that). The grant keeps at least 12.
+	grantW = min(grantW, max(termW-(2+idW+2+agentW+2+2)-40, 12))
 	prefix := 2 + idW + 2 + agentW + 2 + grantW + 2
 	for _, g := range list {
-		text := truncMiddle(grantText(g, home), grantW)
+		text := shortenValue(grantText(g, home), grantW)
 		why := lookReasons(g)
 		why = truncEnd(why, max(termW-prefix-1, 10))
 		lvl := string(g.Risk.Level)
@@ -346,15 +384,10 @@ func lookReasons(g model.Grant) string {
 // moreCommand is the command that lists what the summary left out, based on the first
 // grant that is missing from the list.
 func moreCommand(g model.Grant) string {
-	switch lookRank(g) {
-	case 0:
+	if lookRank(g) == 0 {
 		return "grants list --flag secret"
-	case 1:
-		return "grants list --risk high"
-	case 2:
-		return "grants list --flag one-off"
 	}
-	return "grants list --flag unused"
+	return "grants list --risk high"
 }
 
 // coverageLine says how far back the history reaches for each agent.

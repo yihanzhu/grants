@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -47,4 +49,14 @@ func listErr(folder string) (struct{}, error) {
 
 func isDenied(err error) bool {
 	return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+// Within reports whether p is dir or inside it. Both are cleaned first; an empty
+// path is never within anything.
+func Within(p, dir string) bool {
+	if p == "" || dir == "" {
+		return false
+	}
+	p, dir = filepath.Clean(p), filepath.Clean(dir)
+	return p == dir || dir == "/" || strings.HasPrefix(p, dir+"/")
 }

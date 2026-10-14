@@ -133,43 +133,60 @@ func renderList(w io.Writer, shown []model.Grant, res core.Result, o listOpts, s
 		riskCol  = 7
 	)
 	rows := make([][]string, 0, len(shown))
+	short := make([]string, 0, len(shown)) // the short scope of each row
 	for _, g := range shown {
 		rows = append(rows, []string{
 			g.ID, string(g.Agent), string(g.Kind), grantText(g, home),
-			truncMiddle(scopeText(g, home), 30), fmtWindow(g.Granted), lastUsed(g), string(g.Risk.Level), flagsText(g),
+			scopeText(g, home), fmtWindow(g.Granted), lastUsed(g), string(g.Risk.Level), flagsText(g),
 		})
+		short = append(short, scopeShort(g))
 	}
 	widths := make([]int, len(head))
 	for i, h := range head {
 		widths[i] = width(h)
 	}
-	for _, r := range rows {
-		for i, c := range r {
-			if i != grantCol {
-				widths[i] = max(widths[i], width(c))
+	fixed, longest, scopeFull, scopeCut := 0, 0, width(head[scopeCol]), width(head[scopeCol])
+	for i, r := range rows {
+		for c, cell := range r {
+			if c != grantCol && c != scopeCol {
+				widths[c] = max(widths[c], width(cell))
 			}
 		}
-	}
-	// On a narrow terminal the scope column goes first: grants show has it.
-	skip := map[int]bool{}
-	other := func() int {
-		n := 0
-		for i, wd := range widths {
-			if i != grantCol && !skip[i] {
-				n += wd + 2
-			}
-		}
-		return n
-	}
-	if termW-other() < 30 {
-		skip[scopeCol] = true
-	}
-	grantW := max(termW-other(), 16)
-	longest := 0
-	for _, r := range rows {
 		longest = max(longest, width(r[grantCol]))
+		scopeFull = max(scopeFull, width(r[scopeCol]))
+		scopeCut = max(scopeCut, width(short[i]))
 	}
-	widths[grantCol] = min(max(longest, width(head[grantCol])), grantW)
+	for c, wd := range widths {
+		if c != grantCol && c != scopeCol {
+			fixed += wd + 2
+		}
+	}
+	// The GRANT column is what people read, so it gets the width first. The scope column
+	// gives way in steps: project paths shrink to their last segment, and when the grant
+	// would still be cut below 30 characters, the column goes.
+	skip := map[int]bool{}
+	grantW := longest
+	switch {
+	case fixed+scopeFull+2+longest <= termW:
+		widths[scopeCol] = scopeFull
+	case fixed+scopeCut+2+longest <= termW:
+		widths[scopeCol] = scopeCut
+		for i := range rows {
+			rows[i][scopeCol] = short[i]
+		}
+	default:
+		widths[scopeCol] = scopeCut
+		for i := range rows {
+			rows[i][scopeCol] = short[i]
+		}
+		grantW = termW - fixed - scopeCut - 2
+		if grantW < 30 {
+			skip[scopeCol] = true
+			grantW = termW - fixed
+		}
+		grantW = max(grantW, 16)
+	}
+	widths[grantCol] = max(min(longest, grantW), width(head[grantCol]))
 
 	var cols []int
 	for i := range head {
@@ -182,7 +199,7 @@ func renderList(w io.Writer, shown []model.Grant, res core.Result, o listOpts, s
 		for n, i := range cols {
 			text := cells[i]
 			if i == grantCol {
-				text = truncMiddle(text, widths[i])
+				text = shortenValue(text, widths[i])
 			}
 			last := n == len(cols)-1
 			if !last {

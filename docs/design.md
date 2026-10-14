@@ -38,6 +38,8 @@ Agents do not record when you clicked "always allow". grants rebuilds it from po
 
 The grant was created after the latest snapshot where it is absent and at or before the first snapshot where it is present. The output shows one date when that window is narrow, a range when it is wide, and "before <date>" when no earlier snapshot exists.
 
+A grant with no lower bound and no estimate has an unknown date: the only fact is that it existed by a day. `grants log` keeps these out of the dated list. It prints them after it, in a section "Dates unknown; these existed by:", with one line per day (a count and up to 3 grants; `--all` lists each one). In JSON, such an event has `"existence_only": true`.
+
 ## Measuring use
 
 For each tool call or command in history, grants stores hashed keys: one per command prefix (up to 8 words), one for the whole command, one per folder for file tools, one per host for web fetches, one per tool and MCP server. A rule is turned into the same kind of key, so counting its use is a lookup. Rules whose wildcards cannot be expressed as keys show usage as unknown.
@@ -47,6 +49,10 @@ A grant is flagged `unused` when its use is measurable, history covers the whole
 ## Risk
 
 Each grant gets `high`, `medium` or `low` with reasons, plus flags:
+
+A trusted folder that holds three or more known projects is broad. A project is another trusted folder of either agent inside it, or a git repository directly inside it. A broad Codex folder is `high` (every project inside inherits the trust). A broad Claude Code folder is at least `medium` (folders inside it share the trust). Core counts the projects after it has the whole grant list.
+
+Flags:
 
 - `dead-path`: the rule or trusted folder points to a path that no longer exists. Only active grants carry it.
 - `one-off`: a rule that names a specific URL, script or long argument list, which usually means a single approval was kept forever.
@@ -63,9 +69,23 @@ Each grant gets `high`, `medium` or `low` with reasons, plus flags:
 | Codex rule | delete the `prefix_rule(...)` statement | after restarting Codex |
 | Codex trust | set `trust_level = "untrusted"`; delete the table when the folder no longer exists | after restarting Codex |
 
-Grants in the same file are planned together, so several grants in one file become one edit. `revoke --dead` plans each grant on its own, so one stale grant does not block the rest. Managed (organization) settings are never edited. Codex trust is set to `untrusted` instead of deleted because the Codex desktop app trusts any folder with no decision again on its next thread.
+Grants in the same file are planned together, so several grants in one file become one edit. A selector (`--dead`, `--one-off`, `--unused [days]`) plans each grant on its own, so one stale grant does not block the rest. A selector picks every active grant that grants can edit and that has its flag. Selectors combine with each other and with ids, and a grant that matches more than one is revoked once. The plan and the confirmation are the same for every selector. Managed (organization) settings are never edited. Codex trust is set to `untrusted` instead of deleted because the Codex desktop app trusts any folder with no decision again on its next thread.
 
 Before writing, grants copies each file to `<state>/backups/<batch>/` and checks the file still has the content it planned against. `grants undo` restores the latest batch if the files have not changed since.
+
+## Summary
+
+`grants` with no command prints a headline, a table, then two lists:
+
+- **Needs a look**: active grants that are high risk or hold a credential (`secret`). A grant flagged `dead-path` or `one-off` that grants can revoke moves to Clean up, unless it holds a credential. Credentials always stay in view.
+- **Clean up**: the bulk commands. Each grant is counted in the first list that fits: `dead-path` (`grants revoke --dead`), `one-off` (`grants revoke --one-off`), then `unused` (`grants revoke --unused`, with the number of days when it is not 90). The list shows the backup, preview and undo hint once.
+
+## Display
+
+- A Codex rule shows its tokens joined by spaces. A token is quoted only when it holds white space (double quotes, or single quotes when it holds a double quote). The text is for reading. Keys and revoke use the real pattern.
+- A value that is too long for its column is cut in two steps: each URL in it becomes `scheme://host/…/last-segment` (no query), then the middle is cut.
+- The GRANT column gets width first. In `grants list` the scope column shrinks first (`project …/<last segment>`) and goes last of all.
+- `grants show` prints evidence files relative to the agent home (`sessions/2026/…`) and wraps them to the terminal width.
 
 ## Storage
 

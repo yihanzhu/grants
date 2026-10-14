@@ -282,15 +282,21 @@ func TestRenderSummaryOnlyOneNeedsALook(t *testing.T) {
 
 func TestNeedsLookOrder(t *testing.T) {
 	mk := func(id string, lvl model.Level, day string, flags ...model.Flag) model.Grant {
-		return model.Grant{ID: id, Status: model.StatusActive, Risk: model.Risk{Level: lvl}, Flags: flags, Granted: model.Window{Before: at(day + " 00:00")}}
+		return model.Grant{ID: id, Status: model.StatusActive, Revocable: true, Risk: model.Risk{Level: lvl}, Flags: flags, Granted: model.Window{Before: at(day + " 00:00")}}
 	}
+	managed := mk("managed-dead", model.RiskHigh, "2026-03-01", model.FlagDeadPath)
+	managed.Revocable = false
 	grants := []model.Grant{
 		mk("unused-new", model.RiskLow, "2026-05-01", model.FlagUnused),
+		mk("unused-high", model.RiskHigh, "2026-02-01", model.FlagUnused),
 		mk("oneoff", model.RiskMedium, "2026-04-01", model.FlagOneOff),
+		mk("oneoff-high", model.RiskHigh, "2026-04-01", model.FlagOneOff),
 		mk("high-old", model.RiskHigh, "2026-01-01"),
 		mk("high-new", model.RiskHigh, "2026-03-01"),
 		mk("secret-old", model.RiskHigh, "2025-01-01", model.FlagSecret),
+		mk("secret-oneoff", model.RiskHigh, "2025-02-01", model.FlagSecret, model.FlagOneOff),
 		mk("dead-high", model.RiskHigh, "2026-03-01", model.FlagDeadPath),
+		managed, // grants cannot revoke it, so it is not a clean-up job
 		mk("fine", model.RiskLow, "2026-03-01"),
 		{ID: "gone-high", Status: model.StatusGone, Risk: model.Risk{Level: model.RiskHigh}},
 	}
@@ -298,7 +304,9 @@ func TestNeedsLookOrder(t *testing.T) {
 	for _, g := range needsLook(grants) {
 		got = append(got, g.ID)
 	}
-	want := "secret-old high-new high-old oneoff unused-new"
+	// Dead-path and one-off grants go to Clean up, except one that holds a secret. High
+	// risk grants that are only unused stay.
+	want := "secret-oneoff secret-old high-new managed-dead unused-high high-old"
 	if strings.Join(got, " ") != want {
 		t.Errorf("order = %v, want %s", got, want)
 	}

@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -156,6 +158,9 @@ type Report struct {
 	Grants   []Grant    `json:"grants"`
 	Notes    []Note     `json:"notes,omitempty"`
 	Coverage []Coverage `json:"coverage,omitempty"`
+	// Unread lists key prefixes whose config could not be read on this run. Grants
+	// seen earlier under these prefixes must not be reported as removed.
+	Unread []string `json:"-"`
 }
 
 type Note struct {
@@ -190,6 +195,28 @@ func KeyClaudeTrust(path string) string      { return "claude-code|trust|" + pat
 // say which rules file a prefix came from, so the file is not part of the key.
 func KeyCodexRule(patternJSON string) string { return "codex|rule|" + patternJSON }
 func KeyCodexTrust(path string) string       { return "codex|trust|" + path }
+
+// Plural writes a count with the right noun: "1 grant", "2 grants", "1,204 grants".
+func Plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return Commas(n) + " " + many
+}
+
+// Commas writes 1234 as 1,234.
+func Commas(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
 
 // MakeID returns the short id shown to users.
 func MakeID(key string) string {

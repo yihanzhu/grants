@@ -97,10 +97,19 @@ type globals struct {
 	unused  int
 }
 
+const defaultUnusedDays = int(core.DefaultUnusedAfter / (24 * time.Hour))
+
 func (g *globals) register(fs *flag.FlagSet) {
+	g.registerBase(fs)
+	fs.IntVar(&g.unused, "unused", defaultUnusedDays, "")
+}
+
+// registerBase registers the flags every command takes except --unused, for commands
+// that read --unused in their own way (revoke).
+func (g *globals) registerBase(fs *flag.FlagSet) {
 	fs.BoolVar(&g.noColor, "no-color", false, "")
 	fs.BoolVar(&g.noCache, "no-cache", false, "")
-	fs.IntVar(&g.unused, "unused", int(core.DefaultUnusedAfter/(24*time.Hour)), "")
+	g.unused = defaultUnusedDays
 }
 
 // parse reads flags that may come before or after the other arguments. done is true
@@ -182,7 +191,7 @@ func resolve(grants []model.Grant, q string, home string) (model.Grant, error) {
 		return hits[0], nil
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "the id %q matches %d grants; give more characters:", q, len(hits))
+	fmt.Fprintf(&sb, "the id %q matches %s; give more characters:", q, plural(len(hits), "grant", "grants"))
 	for i, g := range hits {
 		if i == 6 {
 			fmt.Fprintf(&sb, "\n  ... and %d more", len(hits)-i)

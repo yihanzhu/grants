@@ -267,9 +267,13 @@ func TestPatternJSONAndDisplay(t *testing.T) {
 	}{
 		{[][]string{{"git"}, {"status"}}, `["git","status"]`, "git status"},
 		{[][]string{{"npm"}, {"run", "test"}}, `["npm",["run","test"]]`, "npm run|test"},
-		{[][]string{{"/bin/zsh"}, {"-lc"}, {"echo 'hi' && ls"}}, `["/bin/zsh","-lc","echo 'hi' && ls"]`, `/bin/zsh -lc 'echo '\''hi'\'' && ls'`},
-		{[][]string{{"a\"b"}}, `["a\"b"]`, `'a"b'`},
-		{[][]string{{""}}, `[""]`, "''"},
+		{[][]string{{"/bin/zsh"}, {"-lc"}, {"echo 'hi' && ls"}}, `["/bin/zsh","-lc","echo 'hi' && ls"]`, `/bin/zsh -lc "echo 'hi' && ls"`},
+		{[][]string{{"a\"b"}}, `["a\"b"]`, `a"b`},
+		{[][]string{{"say \"hi\" now"}}, `["say \"hi\" now"]`, `'say "hi" now'`},
+		{[][]string{{"it's \"x\" y"}}, `["it's \"x\" y"]`, `'it'\''s "x" y'`},
+		{[][]string{{"curl"}, {"-H"}, {"X: 1"}}, `["curl","-H","X: 1"]`, `curl -H "X: 1"`},
+		{[][]string{{"it's"}}, `["it's"]`, "it's"},
+		{[][]string{{""}}, `[""]`, `""`},
 		{nil, `[]`, ""},
 	}
 	for _, tt := range tests {

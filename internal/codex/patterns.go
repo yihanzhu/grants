@@ -31,34 +31,36 @@ func PatternJSON(p [][]string) string {
 	return strings.TrimSuffix(sb.String(), "\n")
 }
 
-// PatternDisplay shows a pattern as shell words, with alternatives as a|b.
+// PatternDisplay shows a pattern as plain words joined by spaces, with alternatives
+// as a|b. It is for people to read, not for a shell: a token is quoted only when it
+// holds white space, so the text stays free of escape noise. Keys and revoke use the
+// real pattern, never this text.
 func PatternDisplay(p [][]string) string {
 	words := make([]string, len(p))
 	for i, alts := range p {
 		q := make([]string, len(alts))
 		for j, a := range alts {
-			q[j] = shellQuote(a)
+			q[j] = DisplayToken(a)
 		}
 		words[i] = strings.Join(q, "|")
 	}
 	return strings.Join(words, " ")
 }
 
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	safe := true
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case strings.ContainsRune("_@%+=:,./-~", r):
-		default:
-			safe = false
-		}
-	}
-	if safe {
+// DisplayToken quotes a token for display: raw unless it is empty or holds white
+// space. A token with white space gets double quotes, or single quotes when it holds
+// a double quote. A token with both kinds of quote falls back to single quotes with
+// the usual '\” escape, so the text still reads back as one word.
+func DisplayToken(s string) string {
+	switch {
+	case s == "":
+		return `""`
+	case !strings.ContainsAny(s, " \t\r\n\v\f"):
 		return s
+	case !strings.Contains(s, `"`):
+		return `"` + s + `"`
+	case !strings.Contains(s, "'"):
+		return "'" + s + "'"
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

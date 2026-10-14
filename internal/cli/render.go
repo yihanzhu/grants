@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"fmt"
-	"strconv"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -95,6 +95,57 @@ func truncMiddle(s string, n int) string {
 	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }
 
+// urlRe finds URLs in a rule: a scheme, then everything up to a space, quote or closer.
+var urlRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"` + "`" + `)\]>]+`)
+
+// shortenURL cuts a URL to scheme://host/…/last-segment and drops the query and the
+// fragment. A URL with no path or one path segment keeps all of it.
+func shortenURL(u string) string {
+	tail := ""
+	for strings.HasSuffix(u, ".") || strings.HasSuffix(u, ",") || strings.HasSuffix(u, ";") || strings.HasSuffix(u, ":") {
+		tail = u[len(u)-1:] + tail
+		u = u[:len(u)-1]
+	}
+	scheme, rest, ok := strings.Cut(u, "://")
+	if !ok {
+		return u + tail
+	}
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	host, path, _ := strings.Cut(rest, "/")
+	var segs []string
+	for _, p := range strings.Split(path, "/") {
+		if p != "" {
+			segs = append(segs, p)
+		}
+	}
+	out := scheme + "://" + host
+	switch len(segs) {
+	case 0:
+	case 1:
+		out += "/" + segs[0]
+	default:
+		out += "/…/" + segs[len(segs)-1]
+	}
+	return out + tail
+}
+
+// shortenURLs shortens every URL inside s.
+func shortenURLs(s string) string {
+	return urlRe.ReplaceAllStringFunc(s, shortenURL)
+}
+
+// shortenValue fits a grant value into n characters. It shortens each URL in it first,
+// since the middle of a URL says little, and cuts the middle of the whole text only if
+// that is not enough.
+func shortenValue(s string, n int) string {
+	if width(s) <= n {
+		return s
+	}
+	return truncMiddle(shortenURLs(s), n)
+}
+
 // truncEnd shortens s to n characters by cutting its end.
 func truncEnd(s string, n int) string {
 	r := []rune(s)
@@ -124,25 +175,9 @@ func padLeft(s string, n int) string {
 }
 
 // commas writes 1234 as 1,234.
-func commas(n int) string {
-	s := strconv.Itoa(n)
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
-	for i := len(s) - 3; i > 0; i -= 3 {
-		s = s[:i] + "," + s[i:]
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
-}
+func commas(n int) string { return model.Commas(n) }
 
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return commas(n) + " " + many
-}
+func plural(n int, one, many string) string { return model.Plural(n, one, many) }
 
 // agentName is the name people use for an agent.
 func agentName(a model.Agent) string {
@@ -169,6 +204,18 @@ func scopeText(g model.Grant, home string) string {
 	case model.ScopeProject, model.ScopeLocal, model.ScopeLegacy:
 		if g.Project != "" {
 			return string(g.Scope) + " " + tilde(g.Project, home)
+		}
+	}
+	return string(g.Scope)
+}
+
+// scopeShort is scopeText with the project folder cut to its last segment, such as
+// "project …/app".
+func scopeShort(g model.Grant) string {
+	switch g.Scope {
+	case model.ScopeProject, model.ScopeLocal, model.ScopeLegacy:
+		if g.Project != "" {
+			return string(g.Scope) + " …/" + filepath.Base(g.Project)
 		}
 	}
 	return string(g.Scope)
@@ -243,6 +290,5 @@ func flagMeaning(f model.Flag) string {
 }
 
 func daysText(d time.Duration) string {
-	n := int(d.Hours() / 24)
-	return fmt.Sprintf("%d days", n)
+	return plural(int(d.Hours()/24), "day", "days")
 }
