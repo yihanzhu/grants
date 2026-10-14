@@ -21,6 +21,8 @@ type Batch struct {
 	Time   time.Time   `json:"time"`
 	Files  []BatchFile `json:"files"`
 	Undone bool        `json:"undone,omitempty"`
+	// UndoneAt is when the batch was undone; Batches fills it in.
+	UndoneAt time.Time `json:"undone_at,omitempty"`
 }
 
 type BatchFile struct {

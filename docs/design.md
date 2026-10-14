@@ -42,13 +42,13 @@ The grant was created after the latest snapshot where it is absent and at or bef
 
 For each tool call or command in history, grants stores hashed keys: one per command prefix (up to 8 words), one for the whole command, one per folder for file tools, one per host for web fetches, one per tool and MCP server. A rule is turned into the same kind of key, so counting its use is a lookup. Rules whose wildcards cannot be expressed as keys show usage as unknown.
 
-A grant is flagged `unused` when history covers the whole unused window (90 days by default) and nothing matched.
+A grant is flagged `unused` when its use is measurable, history covers the whole unused window (90 days by default, `--unused <days>`), nothing matched in it, and the grant is older than the window. A grant with no known date counts as old. Only active grants get the flag.
 
 ## Risk
 
 Each grant gets `high`, `medium` or `low` with reasons, plus flags:
 
-- `dead-path`: the rule or trusted folder points to a path that no longer exists.
+- `dead-path`: the rule or trusted folder points to a path that no longer exists. Only active grants carry it.
 - `one-off`: a rule that names a specific URL, script or long argument list, which usually means a single approval was kept forever.
 - `unused`: no matching use in the unused window.
 - `secret`: the rule text contains something that looks like a credential.
@@ -63,7 +63,7 @@ Each grant gets `high`, `medium` or `low` with reasons, plus flags:
 | Codex rule | delete the `prefix_rule(...)` statement | after restarting Codex |
 | Codex trust | set `trust_level = "untrusted"`; delete the table when the folder no longer exists | after restarting Codex |
 
-Managed (organization) settings are never edited. Codex trust is set to `untrusted` instead of deleted because the Codex desktop app trusts any folder with no decision again on its next thread.
+Grants in the same file are planned together, so several grants in one file become one edit. `revoke --dead` plans each grant on its own, so one stale grant does not block the rest. Managed (organization) settings are never edited. Codex trust is set to `untrusted` instead of deleted because the Codex desktop app trusts any folder with no decision again on its next thread.
 
 Before writing, grants copies each file to `<state>/backups/<batch>/` and checks the file still has the content it planned against. `grants undo` restores the latest batch if the files have not changed since.
 
@@ -72,7 +72,7 @@ Before writing, grants copies each file to `<state>/backups/<batch>/` and checks
 State lives in `$GRANTS_STATE_DIR`, default `~/.local/state/grants`:
 
 - `cache-*.gob`: per-file history results, keyed by path, size, modification time, inode and a hash of the first 4 KB.
-- `seen.json`: which grants each run saw, and when.
+- `seen.json`: which grants each run saw, and when. It keeps each grant's rule text or folder with credentials redacted, never a full command history. A grant seen before and absent now is shown as `gone`, with a removal window. A grant with no adapter date is dated from the previous run to now, with the source "first seen by grants".
 - `journal.jsonl`, `backups/`: every revoke and undo.
 
 ## Roadmap

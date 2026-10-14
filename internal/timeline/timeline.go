@@ -70,10 +70,12 @@ func Date(obs []Obs) Result {
 		r.RemovedAt = model.Window{After: list[last].T, Before: gone.T, Approx: gone.Approx, Source: gone.Source}
 	}
 
-	// Keep evidence short: transitions plus the first and last observation.
+	// Keep evidence short: transitions, the first and last observation, and the
+	// observations that bound the grant and removal windows.
 	for i, o := range list {
 		changed := i == 0 || list[i-1].Present != o.Present
-		if changed || i == len(list)-1 || i == first {
+		bound := i == first-1 || i == first || i == last || i == last+1
+		if changed || bound || i == len(list)-1 {
 			what := "absent"
 			if o.Present {
 				what = "present"

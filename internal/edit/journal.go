@@ -26,9 +26,10 @@ type journalUndo struct {
 
 // journalRecord reads either kind of line.
 type journalRecord struct {
-	Type  string `json:"type"`
-	Batch *Batch `json:"batch"`
-	ID    string `json:"id"`
+	Type  string    `json:"type"`
+	Batch *Batch    `json:"batch"`
+	ID    string    `json:"id"`
+	Time  time.Time `json:"time"`
 }
 
 func journalPath(stateDir string) string { return filepath.Join(stateDir, "journal.jsonl") }
@@ -62,12 +63,13 @@ func appendJournal(stateDir string, rec any) error {
 	return f.Close()
 }
 
-// readJournal returns the apply batches in journal order and the set of undone IDs.
+// readJournal returns the apply batches in journal order and the undone IDs with the
+// time of the undo.
 // Lines that do not parse (for example one cut short by a crash) are skipped.
-func readJournal(stateDir string) ([]Batch, map[string]bool, error) {
+func readJournal(stateDir string) ([]Batch, map[string]time.Time, error) {
 	f, err := os.Open(journalPath(stateDir))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, map[string]bool{}, nil
+		return nil, map[string]time.Time{}, nil
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("edit: open journal: %w", err)
@@ -75,7 +77,7 @@ func readJournal(stateDir string) ([]Batch, map[string]bool, error) {
 	defer f.Close()
 
 	var batches []Batch
-	undone := map[string]bool{}
+	undone := map[string]time.Time{}
 	r := bufio.NewReader(f)
 	for {
 		line, err := r.ReadBytes('\n')
@@ -86,7 +88,7 @@ func readJournal(stateDir string) ([]Batch, map[string]bool, error) {
 				case rec.Type == "apply" && rec.Batch != nil && rec.Batch.ID != "":
 					batches = append(batches, *rec.Batch)
 				case rec.Type == "undo" && rec.ID != "":
-					undone[rec.ID] = true
+					undone[rec.ID] = rec.Time
 				}
 			}
 		}

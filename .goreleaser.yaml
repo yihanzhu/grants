@@ -1,0 +1,40 @@
+# GoReleaser v2 configuration. Run by .github/workflows/release.yml on v* tags.
+version: 2
+
+project_name: grants
+
+builds:
+  - id: grants
+    main: .
+    binary: grants
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: grants
+    formats:
+      - tar.gz
+    name_template: "grants_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

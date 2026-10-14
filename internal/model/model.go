@@ -8,6 +8,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"time"
 )
 
@@ -90,6 +91,7 @@ type Grant struct {
 
 	Granted  Window     `json:"granted"`
 	LastSeen time.Time  `json:"last_seen,omitempty"` // last time history showed it present (gone and unknown grants)
+	Removed  Window     `json:"removed,omitempty"`   // gone grants: removed after After, at or before Before
 	Usage    Usage      `json:"usage"`
 	Risk     Risk       `json:"risk"`
 	Flags    []Flag     `json:"flags,omitempty"`
@@ -193,4 +195,47 @@ func KeyCodexTrust(path string) string       { return "codex|trust|" + path }
 func MakeID(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:7]
+}
+
+// The JSON forms below leave out unknown times instead of writing 0001-01-01.
+
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// MarshalJSON leaves out bounds that are unknown.
+func (w Window) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		After  *time.Time `json:"after,omitempty"`
+		Before *time.Time `json:"before,omitempty"`
+		Approx bool       `json:"approx,omitempty"`
+		Source string     `json:"source,omitempty"`
+	}{timePtr(w.After), timePtr(w.Before), w.Approx, w.Source})
+}
+
+// MarshalJSON leaves out times that are unknown.
+func (u Usage) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Known bool       `json:"known"`
+		Count int        `json:"count"`
+		Last  *time.Time `json:"last,omitempty"`
+		Since *time.Time `json:"since,omitempty"`
+	}{u.Known, u.Count, timePtr(u.Last), timePtr(u.Since)})
+}
+
+// MarshalJSON leaves out LastSeen and Removed when they are unknown.
+func (g Grant) MarshalJSON() ([]byte, error) {
+	type plain Grant // no methods, so no recursion
+	out := struct {
+		plain
+		LastSeen *time.Time `json:"last_seen,omitempty"`
+		Removed  *Window    `json:"removed,omitempty"`
+	}{plain: plain(g), LastSeen: timePtr(g.LastSeen)}
+	if !g.Removed.Before.IsZero() || !g.Removed.After.IsZero() {
+		out.Removed = &g.Removed
+	}
+	return json.Marshal(out)
 }

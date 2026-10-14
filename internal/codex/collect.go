@@ -26,6 +26,15 @@ import (
 // point it at a temp folder.
 var managedRulesDir = "/etc/codex/rules"
 
+// OverrideManaged replaces the folder that holds administrator rules and returns a
+// function that puts the default back. It lets tests run on a machine that has real
+// managed rules.
+func OverrideManaged(dir string) (restore func()) {
+	old := managedRulesDir
+	managedRulesDir = dir
+	return func() { managedRulesDir = old }
+}
+
 const restartNote = "Restart Codex to apply."
 
 // ruleFile is one parsed .rules file.

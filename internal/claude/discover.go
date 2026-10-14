@@ -14,6 +14,15 @@ import (
 // managedRoots are the folders that hold organization settings. Tests replace it.
 var managedRoots = defaultManagedRoots()
 
+// OverrideManaged replaces the folders that hold organization settings and returns a
+// function that puts the defaults back. It lets tests run on a machine that has
+// real managed settings.
+func OverrideManaged(dirs ...string) (restore func()) {
+	old := managedRoots
+	managedRoots = dirs
+	return func() { managedRoots = old }
+}
+
 func defaultManagedRoots() []string {
 	switch runtime.GOOS {
 	case "darwin":

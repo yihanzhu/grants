@@ -192,7 +192,7 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 	}
 	var batch *Batch
 	for i := len(batches) - 1; i >= 0; i-- {
-		if !undone[batches[i].ID] {
+		if _, done := undone[batches[i].ID]; !done {
 			batch = &batches[i]
 			break
 		}
@@ -272,7 +272,10 @@ func Batches(stateDir string) ([]Batch, error) {
 	out := make([]Batch, 0, len(batches))
 	for i := len(batches) - 1; i >= 0; i-- {
 		b := batches[i]
-		b.Undone = undone[b.ID]
+		b.UndoneAt, b.Undone = undone[b.ID], false
+		if _, ok := undone[b.ID]; ok {
+			b.Undone = true
+		}
 		out = append(out, b)
 	}
 	return out, nil

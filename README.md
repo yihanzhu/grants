@@ -1,0 +1,121 @@
+# grants
+
+grants lists and revokes the permissions you gave AI coding agents.
+
+## Why
+
+Every time you choose "always allow" or "trust this folder", your agent saves a grant. These grants pile up. You forget them. Some point to folders you deleted. Some hold a one-off command or a pasted token. Nothing shows you the full list, so nothing prompts you to clean it.
+
+grants finds every standing grant, shows when it was given and when it was last used, flags the risky and stale ones, and removes the ones you pick. It backs up each file first. One command undoes the change.
+
+## Install
+
+With Go 1.24 or newer:
+
+```sh
+go install github.com/yihanzhu/grants@latest
+```
+
+Or download a binary for macOS or Linux (amd64 or arm64) from [GitHub Releases](https://github.com/yihanzhu/grants/releases).
+
+## Quick start
+
+```sh
+grants
+```
+
+The summary below comes from a made-up home folder.
+
+```text
+grants: 13 active grants across 2 agents. 5 need a look. 4 point to deleted paths.
+
+                      rules   trusted folders   high risk   removed
+Claude Code   5 (1 deleted)     2 (1 deleted)           3         0
+Codex         4 (1 deleted)     2 (1 deleted)           2         0
+
+Needs a look
+  081de94  claude-code  Bash(curl -H 'Aut…//example.com/x)  high · one-off · never used · curl to …
+  c7efbee  claude-code  Bash(make:*)                        high · last used 2026-10-03 · any subc…
+  0978ed3  claude-code  Bash(git push:*)                    high · never used · pushes code to a r…
+  642865d  codex        curl -L 'https://…ple.com/a/b?x=1'  high · one-off · last used 2026-06-01 …
+  7bdf7c2  codex        git push                            high · never used · pushes code to a r…
+
+Clean up
+  4 grants point to deleted paths: grants revoke --dead
+  Files are backed up first. Preview with --dry-run. Undo with grants undo.
+  3 grants were not used in 90 days: grants list --flag unused
+
+History covers Claude Code from 2026-06-01 and Codex from 2026-06-01.
+Next: grants show 081de94 · grants revoke 081de94 · grants log
+```
+
+Look at one grant, preview its removal, then remove it:
+
+```sh
+grants show 1af2cd9
+grants revoke 1af2cd9 --dry-run
+grants revoke 1af2cd9
+grants undo
+```
+
+```text
+$ grants revoke 1af2cd9 --dry-run
+Plan: revoke 1 grant in 1 file. Nothing is written until you confirm.
+
+  1af2cd9  remove "Read(~/notes/**)" from permissions.allow
+           ~/.claude/settings.json
+           - "Bash(git push:*)",
+           - "Read(~/notes/**)"
+           + "Bash(git push:*)"
+           Claude Code applies it on the next tool call.
+
+Dry run. Nothing was changed.
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `grants` | Summary: what you granted, what needs a look, how to clean up |
+| `grants list` | Table of grants. Flags: `--agent`, `--kind rule\|trust`, `--all`, `--risk`, `--flag`, `--json` |
+| `grants show <id>` | One grant with its evidence timeline. `--json` |
+| `grants log` | Granted, removed, revoked and undone, newest first. `--agent`, `--since`, `--json` |
+| `grants revoke <id>...` | Remove grants. `--dead` picks every grant that points to a deleted path. `--dry-run`, `--yes` |
+| `grants undo` | Restore the files changed by the latest revoke. `--force` |
+| `grants scan` | Read the history and show what it covers and how long it took |
+| `grants version` | Print the version |
+
+Every command also takes `--no-color`, `--unused <days>` (default 90) and `--no-cache`. Run `grants help <command>` for details. Exit codes: 0 success, 1 error, 2 usage error.
+
+## How it works
+
+- **Grants.** A grant is a rule (an allowed command or tool) or a trusted folder. Each one is `active`, `gone` (seen before, removed since) or `unknown` (the file that may hold it cannot be read).
+- **Dating.** Agents do not record when you approved something. grants rebuilds the date from the agent's own history: settings backups, session snapshots, first sessions in a folder and file times. It also keeps its own record from the first run on. A date can be a range, or "before" a day. The output says so.
+- **Usage.** grants matches each command and tool call in history against your rules. It stores hashed keys, not command text. A grant is flagged `unused` when history covers the whole window and nothing matched.
+- **Risk.** Each grant is `high`, `medium` or `low`, with reasons. Flags: `dead-path`, `one-off`, `unused`, `secret`, `committed`.
+
+The full design is in [docs/design.md](docs/design.md).
+
+## Safety and privacy
+
+- grants never opens a network connection.
+- It is read-only. Only `revoke` and `undo` write, and `revoke` asks first (or use `--dry-run` to only look).
+- It edits only the bytes that hold the grant, then parses the file again to check the result.
+- It copies each file to its state folder before writing. `grants undo` restores it, and refuses if the file changed since (unless you use `--force`).
+- It does not store commands or conversation text. The saved state holds hashed keys and short evidence with credentials redacted.
+- It never edits organization-managed settings.
+- State lives in `~/.local/state/grants` (override with `GRANTS_STATE_DIR`).
+- On macOS, some folders are protected by privacy controls. Give your terminal Full Disk Access to include them. Without it, grants shows what it could not read.
+
+## Supported agents
+
+| Agent | Covered |
+|---|---|
+| Claude Code | `permissions.allow` rules in user, project, local and managed settings; trusted folders in `~/.claude.json` |
+| Codex | `prefix_rule` allow rules in `rules/*.rules`; trusted folders in `config.toml` |
+
+Not covered yet: modes such as `defaultMode`, `approval_policy` and sandbox settings; MCP servers, plugins and hooks; other agents (Gemini CLI, Cursor, Copilot CLI and more). See the [roadmap](docs/design.md#roadmap).
+
+## License
+
+[MIT](LICENSE)
