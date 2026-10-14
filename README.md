@@ -10,7 +10,7 @@ grants finds every standing grant, shows when it was given and when it was last 
 
 ## Install
 
-With Go 1.24 or newer:
+With Go 1.25 or newer:
 
 ```sh
 go install github.com/yihanzhu/grants@latest

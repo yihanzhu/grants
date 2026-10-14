@@ -231,11 +231,12 @@ func (c *collector) readSessions(opt scan.Options) {
 	for _, root := range []string{filepath.Join(c.env.CodexHome, "sessions"), filepath.Join(c.env.CodexHome, "archived_sessions")} {
 		got, sk, _ := scan.Walk(root, func(p string) bool {
 			n := filepath.Base(p)
-			return strings.HasPrefix(n, "rollout-") && strings.HasSuffix(n, ".jsonl")
+			return strings.HasPrefix(n, "rollout-") && (strings.HasSuffix(n, ".jsonl") || strings.HasSuffix(n, ".jsonl.zst"))
 		})
 		files = append(files, got...)
 		skipped += sk
 	}
+	files = withoutCompressedTwins(files)
 	var cache *scan.Cache
 	if !opt.NoCache && c.env.StateDir != "" {
 		var err error
@@ -749,4 +750,23 @@ func ownedBelow(p, dir string, trusted map[string]bool) bool {
 		q = up
 	}
 	return false
+}
+
+// withoutCompressedTwins drops x.jsonl.zst when x.jsonl is also listed. Codex
+// compresses older sessions; while it does, both copies can exist for a moment.
+func withoutCompressedTwins(files []string) []string {
+	plain := map[string]bool{}
+	for _, f := range files {
+		if strings.HasSuffix(f, ".jsonl") {
+			plain[f] = true
+		}
+	}
+	out := files[:0]
+	for _, f := range files {
+		if strings.HasSuffix(f, ".zst") && plain[strings.TrimSuffix(f, ".zst")] {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }

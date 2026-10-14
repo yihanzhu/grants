@@ -6,6 +6,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // ErrStop can be returned by a callback to end iteration early without an error.
@@ -48,12 +51,22 @@ func Each(r io.Reader, fn func(line []byte) error) error {
 	}
 }
 
-// EachFile opens path and calls Each on it.
+// EachFile opens path and calls Each on it. A path ending in .zst is decompressed
+// first; Codex compresses older session files this way.
 func EachFile(path string, fn func(line []byte) error) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return Each(f, fn)
+	if !strings.HasSuffix(path, ".zst") {
+		return Each(f, fn)
+	}
+	// One goroutine per decoder: scan already reads many files in parallel.
+	d, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return Each(d, fn)
 }
