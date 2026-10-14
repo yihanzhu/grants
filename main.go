@@ -3,6 +3,7 @@ package main
 
 import (
 	"os"
+	"runtime/debug"
 
 	"github.com/yihanzhu/grants/internal/cli"
 )
@@ -12,5 +13,11 @@ var version = "dev"
 
 func main() {
 	cli.Version = version
+	// go install builds without ldflags; the module version is in the build info.
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			cli.Version = bi.Main.Version
+		}
+	}
 	os.Exit(cli.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
