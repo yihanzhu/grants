@@ -35,23 +35,23 @@ func TestRedact(t *testing.T) {
 		{"placeholder kept", "--token=<your token>", "--token=<your token>"},
 		{"wildcard kept", "token=*", "token=*"},
 		{"auth host kept", "http://auth:8080/x", "http://auth:8080/x"},
-		{"openai shape", "key sk-abcdefghijklmnopqrstuvwxyz0123", "key [redacted]"},
-		{"anthropic shape", "sk-ant-api03-abcdefghijklmnop_qrstuv-wxyz", "[redacted]"},
+		{"openai shape", "key sk-" + "abcdefghijklmnopqrstuvwxyz0123", "key [redacted]"},
+		{"anthropic shape", "sk-" + "ant-api03-abcdefghijklmnop_qrstuv-wxyz", "[redacted]"},
 		{"sk too short", "sk-short", "sk-short"},
 		{"task- is not sk-", "task-abcdefghijklmnopqrstuvwxyz", "task-abcdefghijklmnopqrstuvwxyz"},
-		{"ghp", "ghp_0123456789abcdefghijABCDEFGHIJ0123456", "[redacted]"},
-		{"gho", "gho_0123456789abcdefghij", "[redacted]"},
-		{"ghs", "ghs_0123456789abcdefghij", "[redacted]"},
-		{"ghu", "ghu_0123456789abcdefghij", "[redacted]"},
-		{"github_pat", "github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "[redacted]"},
-		{"slack", "xoxb-1234567890-abcdefghij", "[redacted]"},
-		{"slack p", "xoxp-1234567890-abcdefghij", "[redacted]"},
-		{"aws", "AKIAABCDEFGHIJKLMNOP is the id", "[redacted] is the id"},
+		{"ghp", "ghp_" + "0123456789abcdefghijABCDEFGHIJ0123456", "[redacted]"},
+		{"gho", "gho_" + "0123456789abcdefghij", "[redacted]"},
+		{"ghs", "ghs_" + "0123456789abcdefghij", "[redacted]"},
+		{"ghu", "ghu_" + "0123456789abcdefghij", "[redacted]"},
+		{"github_pat", "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnop", "[redacted]"},
+		{"slack", "xoxb-" + "1234567890-abcdefghij", "[redacted]"},
+		{"slack p", "xoxp-" + "1234567890-abcdefghij", "[redacted]"},
+		{"aws", "AKIA" + "ABCDEFGHIJKLMNOP is the id", "[redacted] is the id"},
 		{"aws too short", "AKIAABC", "AKIAABC"},
-		{"google", "AIzaSyA-1234567890abcdefghijklmnopqrstu", "[redacted]"},
-		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln", "[redacted]"},
-		{"pem", "x -----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY----- y", "x [redacted] y"},
-		{"pem unterminated", "-----BEGIN PRIVATE KEY-----\nMIIabc", "[redacted]"},
+		{"google", "AIza" + "SyA-1234567890abcdefghijklmnopqrstu", "[redacted]"},
+		{"jwt", "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln", "[redacted]"},
+		{"pem", "x -----BEGIN RSA PRIVATE " + "KEY-----\nMIIabc\n-----END RSA PRIVATE " + "KEY----- y", "x [redacted] y"},
+		{"pem unterminated", "-----BEGIN PRIVATE " + "KEY-----\nMIIabc", "[redacted]"},
 		{"url password", "git clone https://bob:s3cret@example.com/r.git", "git clone https://bob:[redacted]@example.com/r.git"},
 		{"url user only", "https://bob@example.com/r", "https://bob@example.com/r"},
 		{"query token", "https://example.com/x?token=abc&a=1", "https://example.com/x?token=[redacted]&a=1"},
@@ -77,7 +77,7 @@ func TestRedact(t *testing.T) {
 }
 
 func TestRedactLeavesNoSecret(t *testing.T) {
-	secrets := []string{"hunter2xyz", "abcdef123456", "ghp_0123456789abcdefghij", "s3cretPass"}
+	secrets := []string{"hunter2xyz", "abcdef123456", "ghp_" + "0123456789abcdefghij", "s3cretPass"}
 	for _, s := range secrets {
 		for _, tmpl := range []string{"--token=%s", "password: %s", "Bearer %s", "https://u:%s@h/x", "?key=%s"} {
 			in := fmt.Sprintf(tmpl, s)

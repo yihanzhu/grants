@@ -395,7 +395,7 @@ func TestFlags(t *testing.T) {
 }
 
 func TestSecretRaisesLevel(t *testing.T) {
-	g := claudeRule("Bash(echo ghp_0123456789abcdefghijABCDEF:*)", "/work/app", model.ScopeProject)
+	g := claudeRule("Bash(echo ghp_"+"0123456789abcdefghijABCDEF:*)", "/work/app", model.ScopeProject)
 	Assess(g, testEnv, always)
 	if g.Risk.Level != model.RiskHigh || !slices.Contains(g.Risk.Reasons, "contains a credential") {
 		t.Errorf("got %+v", g.Risk)

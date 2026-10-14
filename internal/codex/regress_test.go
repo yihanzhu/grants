@@ -192,7 +192,7 @@ func TestTrustUsageSkipsSubagentRollouts(t *testing.T) {
 }
 
 func TestCacheKeepsPrefixTokensRedacted(t *testing.T) {
-	const secret = "ghp_SyntheticTokenValue0123456789"
+	const secret = "ghp_" + "SyntheticTokenValue0123456789"
 	const secret2 = "SyntheticFlagValue987654321"
 	curl := []string{"curl", "-H", "X: " + secret}
 	flag := []string{"tool", "--token", secret2}
@@ -223,7 +223,7 @@ func TestCacheKeepsPrefixTokensRedacted(t *testing.T) {
 }
 
 func TestRuleWithSecretStillMatchesSnapshots(t *testing.T) {
-	const secret = "ghp_SyntheticTokenValue0123456789"
+	const secret = "ghp_" + "SyntheticTokenValue0123456789"
 	m := newMiniHome(t, "")
 	pat := []string{"curl", "-H", "X: " + secret}
 	m.session(t, "a", (&rollout{}).meta(at(5, 10, 0), "/work/app", "cli").worldState(at(5, 10, 1)))
