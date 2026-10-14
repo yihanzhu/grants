@@ -130,3 +130,38 @@ func TestBroadTrustIgnoresAgentWorktrees(t *testing.T) {
 		t.Errorf("worktrees made the repository broad: %+v", grants[0].Risk)
 	}
 }
+
+func TestBroadTrustHiddenFolders(t *testing.T) {
+	cases := []struct {
+		name    string
+		dirs    []string
+		repos   []string
+		trusted []string // inside the judged folder, besides the folder itself
+		folder  string
+		want    model.Level
+	}{
+		{"worktrees count as the repository that holds them",
+			[]string{"/w", "/w/x", "/w/y", "/w/org/app/.claude/worktrees/a", "/w/org/app/.claude/worktrees/b"}, nil,
+			[]string{"/w/x", "/w/y", "/w/org/app/.claude/worktrees/a", "/w/org/app/.claude/worktrees/b"}, "/w", model.RiskHigh},
+		{"hidden git folders do not count",
+			[]string{"/h"}, []string{"/h/.oh-my-zsh", "/h/.nvm", "/h/.pyenv"}, nil, "/h", model.RiskLow},
+		{"a hidden trusted folder can itself be broad",
+			[]string{"/h/.config", "/h/.config/a", "/h/.config/b", "/h/.config/c"}, nil,
+			[]string{"/h/.config/a", "/h/.config/b", "/h/.config/c"}, "/h/.config", model.RiskHigh},
+		{"a dotted name that is not hidden counts",
+			[]string{"/w", "/w/my.app", "/w/b"}, []string{"/w/c"}, []string{"/w/my.app", "/w/b"}, "/w", model.RiskHigh},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exists, subdirs := fakeFS(c.dirs, c.repos...)
+			grants := []model.Grant{trustGrant(model.Codex, c.folder)}
+			for _, d := range c.trusted {
+				grants = append(grants, trustGrant(model.ClaudeCode, d))
+			}
+			markBroadTrust(grants, exists, subdirs)
+			if grants[0].Risk.Level != c.want {
+				t.Errorf("%s: %+v", c.folder, grants[0].Risk)
+			}
+		})
+	}
+}

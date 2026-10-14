@@ -50,7 +50,7 @@ A grant is flagged `unused` when its use is measurable, history covers the whole
 
 Each grant gets `high`, `medium` or `low` with reasons, plus flags:
 
-A trusted folder that holds three or more known projects is broad. A project is another trusted folder of either agent inside it, or a git repository directly inside it. A broad Codex folder is `high` (every project inside inherits the trust). A broad Claude Code folder is at least `medium` (folders inside it share the trust). Core counts the projects after it has the whole grant list.
+A trusted folder that holds three or more known projects is broad. A project is another trusted folder of either agent inside it, or a git repository directly inside it. A trusted folder under a hidden folder, such as an agent worktree in `.claude/worktrees`, counts as the folder that holds it; hidden git folders directly inside do not count. A broad Codex folder is `high` (every project inside inherits the trust). A broad Claude Code folder is at least `medium` (folders inside it share the trust). Core counts the projects after it has the whole grant list.
 
 Flags:
 

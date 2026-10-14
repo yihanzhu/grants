@@ -15,8 +15,8 @@ const maxRepoScan = 5000
 
 // markBroadTrust raises the risk of trusted folders that hold several known projects.
 // A project is another trusted folder of either agent inside the folder, or a git
-// repository directly inside it; folders under hidden folders (agent worktrees) do
-// not count. Only the whole grant list shows the first kind, so
+// repository directly inside it. A trusted folder under a hidden folder (an agent
+// worktree) counts as the folder that holds it; hidden git folders do not count. Only the whole grant list shows the first kind, so
 // this runs after every grant is assessed. exists and subdirs are the file system.
 func markBroadTrust(grants []model.Grant, exists func(string) bool, subdirs func(dir string) []string) {
 	var trusted []string
@@ -33,12 +33,14 @@ func markBroadTrust(grants []model.Grant, exists func(string) bool, subdirs func
 		dir := filepath.Clean(g.Value)
 		projects := map[string]bool{}
 		for _, t := range trusted {
-			if t != dir && (dir == "/" || strings.HasPrefix(t, dir+"/")) && !hiddenBelow(dir, t) {
-				projects[t] = true
+			if t != dir && (dir == "/" || strings.HasPrefix(t, dir+"/")) {
+				if p := visibleOwner(dir, t); p != dir {
+					projects[p] = true
+				}
 			}
 		}
 		for _, sub := range subdirs(dir) {
-			if !hiddenBelow(dir, sub) && exists(filepath.Join(sub, ".git")) {
+			if !strings.HasPrefix(filepath.Base(sub), ".") && exists(filepath.Join(sub, ".git")) {
 				projects[sub] = true
 			}
 		}
@@ -46,19 +48,22 @@ func markBroadTrust(grants []model.Grant, exists func(string) bool, subdirs func
 	}
 }
 
-// hiddenBelow reports whether p sits under a hidden folder inside dir, such as
-// dir/.claude/worktrees/x. Agent worktrees of one repository are not separate projects.
-func hiddenBelow(dir, p string) bool {
+// visibleOwner returns the folder that p counts as when judging dir: p itself, or
+// the folder that holds the first hidden folder on the way down from dir. An agent
+// worktree such as dir/app/.claude/worktrees/x counts as dir/app.
+func visibleOwner(dir, p string) string {
 	rel, err := filepath.Rel(dir, p)
 	if err != nil {
-		return false
+		return p
 	}
+	owner := dir
 	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
-		if strings.HasPrefix(seg, ".") && seg != "." && seg != ".." {
-			return true
+		if strings.HasPrefix(seg, ".") {
+			break
 		}
+		owner = filepath.Join(owner, seg)
 	}
-	return false
+	return owner
 }
 
 // listSubdirs lists the folders directly inside dir. A folder that cannot be read

@@ -209,7 +209,8 @@ func (a *app) collect(g *globals) (core.Result, int) {
 
 // fail prints an error and returns the exit code. Text that came from a config file
 // (a rule, a folder, a path, an error that quotes them) can hold control characters, so
-// every string and error argument is cleaned. Only the format, which is ours, may break lines.
+// every string and error argument is cleaned line by line: line breaks are kept (one
+// error per line from errors.Join), every other control character is escaped.
 func (a *app) fail(format string, args ...any) int {
 	safe := make([]any, len(args))
 	for i, arg := range args {
