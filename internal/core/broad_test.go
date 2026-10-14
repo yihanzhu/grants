@@ -116,3 +116,17 @@ func TestBroadTrustOnDisk(t *testing.T) {
 		t.Errorf("missing folder listed %v", got)
 	}
 }
+
+func TestBroadTrustIgnoresAgentWorktrees(t *testing.T) {
+	// A repository with several agent worktrees under .claude/worktrees is one project.
+	dirs := []string{"/w/app", "/w/app/.claude/worktrees/a", "/w/app/.claude/worktrees/b", "/w/app/.claude/worktrees/c"}
+	exists, subdirs := fakeFS(dirs, "/w/app/.hidden-repo")
+	grants := []model.Grant{trustGrant(model.Codex, "/w/app")}
+	for _, d := range dirs[1:] {
+		grants = append(grants, trustGrant(model.ClaudeCode, d))
+	}
+	markBroadTrust(grants, exists, subdirs)
+	if grants[0].Risk.Level != model.RiskLow {
+		t.Errorf("worktrees made the repository broad: %+v", grants[0].Risk)
+	}
+}

@@ -15,7 +15,8 @@ const maxRepoScan = 5000
 
 // markBroadTrust raises the risk of trusted folders that hold several known projects.
 // A project is another trusted folder of either agent inside the folder, or a git
-// repository directly inside it. Only the whole grant list shows the first kind, so
+// repository directly inside it; folders under hidden folders (agent worktrees) do
+// not count. Only the whole grant list shows the first kind, so
 // this runs after every grant is assessed. exists and subdirs are the file system.
 func markBroadTrust(grants []model.Grant, exists func(string) bool, subdirs func(dir string) []string) {
 	var trusted []string
@@ -32,17 +33,32 @@ func markBroadTrust(grants []model.Grant, exists func(string) bool, subdirs func
 		dir := filepath.Clean(g.Value)
 		projects := map[string]bool{}
 		for _, t := range trusted {
-			if t != dir && (dir == "/" || strings.HasPrefix(t, dir+"/")) {
+			if t != dir && (dir == "/" || strings.HasPrefix(t, dir+"/")) && !hiddenBelow(dir, t) {
 				projects[t] = true
 			}
 		}
 		for _, sub := range subdirs(dir) {
-			if exists(filepath.Join(sub, ".git")) {
+			if !hiddenBelow(dir, sub) && exists(filepath.Join(sub, ".git")) {
 				projects[sub] = true
 			}
 		}
 		risk.AssessBroadTrust(g, len(projects))
 	}
+}
+
+// hiddenBelow reports whether p sits under a hidden folder inside dir, such as
+// dir/.claude/worktrees/x. Agent worktrees of one repository are not separate projects.
+func hiddenBelow(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	if err != nil {
+		return false
+	}
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.HasPrefix(seg, ".") && seg != "." && seg != ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // listSubdirs lists the folders directly inside dir. A folder that cannot be read
