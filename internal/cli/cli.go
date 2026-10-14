@@ -164,7 +164,11 @@ func (a *app) parse(name, usage string, fs *flag.FlagSet, g *globals, args []str
 				fmt.Fprint(a.stdout, usage)
 				return nil, exitOK, true
 			}
-			fmt.Fprintf(a.stderr, "grants %s: %v\nRun grants help %s for usage.\n", name, err, name)
+			hint := "Run grants help " + name + " for usage."
+			if name == "help" {
+				hint = "Run grants help to see the commands."
+			}
+			fmt.Fprintf(a.stderr, "grants %s: %s\n%s\n", name, clean(err.Error()), hint)
 			return nil, exitUsage, true
 		}
 		args = fs.Args()
@@ -188,8 +192,7 @@ func (a *app) parse(name, usage string, fs *flag.FlagSet, g *globals, args []str
 func (a *app) collect(g *globals) (core.Result, int) {
 	env, err := core.EnvFromOS(time.Duration(g.unused) * 24 * time.Hour)
 	if err != nil {
-		fmt.Fprintf(a.stderr, "grants: %v\n", err)
-		return core.Result{}, exitError
+		return core.Result{}, a.fail("%v", err)
 	}
 	opt := scan.Options{NoCache: g.noCache}
 	if isTerminal(a.stderr) {
@@ -199,15 +202,45 @@ func (a *app) collect(g *globals) (core.Result, int) {
 	}
 	res, err := core.Run(env, opt)
 	if err != nil {
-		fmt.Fprintf(a.stderr, "grants: %v\n", err)
-		return res, exitError
+		return res, a.fail("%v", err)
 	}
 	return res, exitOK
 }
 
+// fail prints an error and returns the exit code. Text that came from a config file
+// (a rule, a folder, a path, an error that quotes them) can hold control characters, so
+// every string and error argument is cleaned. Only the format, which is ours, may break lines.
 func (a *app) fail(format string, args ...any) int {
-	fmt.Fprintf(a.stderr, "grants: "+format+"\n", args...)
+	safe := make([]any, len(args))
+	for i, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			safe[i] = lineList(strings.Split(v, "\n")).String()
+		case lineList:
+			safe[i] = v.String()
+		case error:
+			// errors.Join puts one error per line; keep those breaks, clean each line.
+			safe[i] = lineList(strings.Split(v.Error(), "\n")).String()
+		default:
+			safe[i] = arg
+		}
+	}
+	fmt.Fprintf(a.stderr, "grants: "+format+"\n", safe...)
 	return exitError
+}
+
+// lineList is an error that spans several lines, such as a list of ids. Each line is
+// cleaned on its own, so the line breaks stay and nothing else can add one.
+type lineList []string
+
+func (l lineList) Error() string { return strings.Join(l, "\n") }
+
+func (l lineList) String() string {
+	out := make([]string, len(l))
+	for i, s := range l {
+		out[i] = clean(s)
+	}
+	return strings.Join(out, "\n")
 }
 
 // resolve finds a grant by a unique id prefix of at least 4 characters.
@@ -231,21 +264,27 @@ func resolve(grants []model.Grant, q string, home string) (model.Grant, error) {
 	case 1:
 		return hits[0], nil
 	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "the id %q matches %s; give more characters:", q, plural(len(hits), "grant", "grants"))
+	lines := lineList{fmt.Sprintf("the id %q matches %s; give more characters:", q, plural(len(hits), "grant", "grants"))}
 	for i, g := range hits {
 		if i == 6 {
-			fmt.Fprintf(&sb, "\n  ... and %d more", len(hits)-i)
+			lines = append(lines, fmt.Sprintf("  ... and %d more", len(hits)-i))
 			break
 		}
-		fmt.Fprintf(&sb, "\n  %s  %s  %s", g.ID, g.Agent, truncMiddle(grantText(g, home), 60))
+		lines = append(lines, fmt.Sprintf("  %s  %s  %s", g.ID, g.Agent, truncMiddle(grantText(g, home), 60)))
 	}
-	return model.Grant{}, errors.New(sb.String())
+	return model.Grant{}, lines
 }
 
 func (a *app) cmdVersion(args []string) int {
-	if len(args) > 0 {
-		fmt.Fprintf(a.stderr, "grants version: unexpected argument %q\nRun grants help version for usage.\n", args[0])
+	var g globals
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	g.register(fs)
+	rest, code, done := a.parse("version", usages["version"], fs, &g, args)
+	if done {
+		return code
+	}
+	if len(rest) > 0 {
+		fmt.Fprintf(a.stderr, "grants version: unexpected argument %q\nRun grants help version for usage.\n", rest[0])
 		return exitUsage
 	}
 	fmt.Fprintf(a.stdout, "grants %s\n", Version)

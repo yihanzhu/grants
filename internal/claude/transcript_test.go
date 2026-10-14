@@ -58,11 +58,11 @@ func TestExtractUsageAndBasics(t *testing.T) {
 		{"mcp server", match.MCPServerKey("srv"), 1},
 	}
 	for _, c := range cases {
-		if got := f.Usage[c.key].Count; got != c.want {
+		if got := usageOf(f)[c.key].Count; got != c.want {
 			t.Errorf("%s: count = %d, want %d", c.name, got, c.want)
 		}
 	}
-	if got := f.Usage[match.ToolKey("Bash")].Last; got != ts("2026-09-01T10:00:00Z").Unix() {
+	if got := usageOf(f)[match.ToolKey("Bash")].Last; got != ts("2026-09-01T10:00:00Z").Unix() {
 		t.Errorf("last = %d", got)
 	}
 }
@@ -212,10 +212,10 @@ func TestExtractLongLinesAndGarbage(t *testing.T) {
 		`{"type":"assistant","message":{"content":"text only, "type":"tool_use"}}`,
 		toolUseLine("2026-09-01T10:00:10Z", tProj, tSession, "u2", "t2", "Bash", m{"command": 5}), // wrong type
 	)
-	if f.Usage[match.DirKey("edit", "/work/app")].Count != 1 {
+	if usageOf(f)[match.DirKey("edit", "/work/app")].Count != 1 {
 		t.Error("the long line was skipped")
 	}
-	if f.Usage[match.ToolKey("Bash")].Count != 1 {
+	if usageOf(f)[match.ToolKey("Bash")].Count != 1 {
 		t.Error("a tool call with a bad input type is still a call")
 	}
 }
@@ -273,4 +273,11 @@ func TestLineTimeAndQuoted(t *testing.T) {
 	if !lineTime([]byte(`{"x":1}`)).IsZero() || quotedAfterLast([]byte(`{"cwd":"unterminated`), keyCwd) != "" {
 		t.Error("missing values must come back empty")
 	}
+}
+
+// usageOf counts every call of one transcript, copies included.
+func usageOf(f TranscriptFacts) map[match.Key]Use {
+	u := map[match.Key]Use{}
+	countCalls(u, f.Calls, nil)
+	return u
 }

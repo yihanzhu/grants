@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -255,7 +256,7 @@ func TestConfigParseNoteHidesFileText(t *testing.T) {
 	}
 }
 
-func TestUnreadConfigIsReportedAndBackupTrustIsUnknown(t *testing.T) {
+func TestUnreadConfigIsNotReadAndBackupTrustIsUnknown(t *testing.T) {
 	m := newMiniHome(t, "")
 	dir := filepath.Join(m.work, "app")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -266,22 +267,34 @@ func TestUnreadConfigIsReportedAndBackupTrustIsUnknown(t *testing.T) {
 	writeFile(t, m.cfg, "[projects\n")
 
 	rep := m.collect()
-	if !hasPrefix(rep.Unread, "codex|trust|") {
-		t.Errorf("Unread = %q, want codex|trust|", rep.Unread)
+	if slices.Contains(rep.Read, m.cfg) {
+		t.Errorf("Read = %q lists a config that did not parse", rep.Read)
 	}
 	g := find(t, rep, model.KindTrust, model.StatusUnknown, dir)
 	if !g.Removed.Before.IsZero() || !g.Removed.After.IsZero() {
 		t.Errorf("an unknown grant has a removal window: %+v", g.Removed)
 	}
 
-	// A readable config reports nothing.
+	// A readable config is listed.
 	writeFile(t, m.cfg, trustToml(dir))
-	if rep := m.collect(); len(rep.Unread) != 0 {
-		t.Errorf("Unread = %q, want none", rep.Unread)
+	if rep := m.collect(); !slices.Contains(rep.Read, m.cfg) {
+		t.Errorf("Read = %q, want %s", rep.Read, m.cfg)
 	}
 }
 
-func TestUnreadRulesFileIsReported(t *testing.T) {
+func TestReadListsRulesFilesThatParsed(t *testing.T) {
+	m := newMiniHome(t, "")
+	good := filepath.Join(m.env.CodexHome, "rules", "default.rules")
+	broken := filepath.Join(m.env.CodexHome, "rules", "broken.rules")
+	writeFile(t, good, `prefix_rule(pattern=["npm", "test"], decision="allow")`+"\n")
+	writeFile(t, broken, `prefix_rule(pattern=["a"], decision="allow")`+"\n"+`prefix_rule(pattern=`+"\n")
+	rep := m.collect()
+	if !slices.Contains(rep.Read, good) || slices.Contains(rep.Read, broken) {
+		t.Errorf("Read = %q, want %s and not %s", rep.Read, good, broken)
+	}
+}
+
+func TestUnreadRulesFileIsNotListed(t *testing.T) {
 	m := newMiniHome(t, "")
 	rules := filepath.Join(m.env.CodexHome, "rules", "default.rules")
 	writeFile(t, rules, `prefix_rule(pattern=["npm", "test"], decision="allow")`+"\n")
@@ -292,16 +305,78 @@ func TestUnreadRulesFileIsReported(t *testing.T) {
 	if _, err := os.ReadFile(rules); err == nil {
 		t.Skip("this user can read a file without permissions")
 	}
-	if rep := m.collect(); !hasPrefix(rep.Unread, "codex|rule|") {
-		t.Errorf("Unread = %q, want codex|rule|", rep.Unread)
+	if rep := m.collect(); slices.Contains(rep.Read, rules) {
+		t.Errorf("Read = %q lists an unreadable file", rep.Read)
 	}
 }
 
-func hasPrefix(list []string, p string) bool {
-	for _, x := range list {
-		if x == p {
-			return true
+// A session listed a rule as approved and the rule is in no file we could read: it may
+// sit in a file or folder we could not read, so it is unknown, not gone.
+func TestRuleSeenInSessionIsUnknownWhenConfigOrRulesCannotBeRead(t *testing.T) {
+	git := []string{"git", "status"}
+	t.Run("config does not parse", func(t *testing.T) {
+		m := newMiniHome(t, "[projects\n")
+		m.session(t, "a", (&rollout{}).meta(at(3, 10, 0), m.work, "cli").worldState(at(3, 10, 1), git))
+		g := find(t, m.collect(), model.KindRule, model.StatusUnknown, "git status")
+		if g.RevokeNote != "File not readable" || !g.Removed.Before.IsZero() {
+			t.Errorf("grant = %+v", g)
+		}
+	})
+	t.Run("rules file cannot be read", func(t *testing.T) {
+		m := newMiniHome(t, "")
+		rules := filepath.Join(m.env.CodexHome, "rules", "default.rules")
+		writeFile(t, rules, `prefix_rule(pattern=["git", "status"], decision="allow")`+"\n")
+		m.session(t, "a", (&rollout{}).meta(at(3, 10, 0), m.work, "cli").worldState(at(3, 10, 1), git))
+		if err := os.Chmod(rules, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(rules, 0o644) })
+		if _, err := os.ReadFile(rules); err == nil {
+			t.Skip("this user can read a file without permissions")
+		}
+		find(t, m.collect(), model.KindRule, model.StatusUnknown, "git status")
+	})
+	t.Run("everything readable", func(t *testing.T) {
+		m := newMiniHome(t, "")
+		m.session(t, "a", (&rollout{}).meta(at(3, 10, 0), m.work, "cli").worldState(at(3, 10, 1), git))
+		find(t, m.collect(), model.KindRule, model.StatusGone, "git status")
+	})
+	t.Run("a later session without the rule still shows removal", func(t *testing.T) {
+		m := newMiniHome(t, "[projects\n")
+		m.session(t, "a", (&rollout{}).meta(at(3, 10, 0), m.work, "cli").worldState(at(3, 10, 1), git))
+		m.session(t, "b", (&rollout{}).meta(at(5, 10, 0), m.work, "cli").worldState(at(5, 10, 1)))
+		find(t, m.collect(), model.KindRule, model.StatusGone, "git status")
+	})
+}
+
+func TestUnparsableConfigIsNotUsedToDateTrust(t *testing.T) {
+	m := newMiniHome(t, "")
+	dir := filepath.Join(m.work, "app")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, m.cfg+".bak-20260310-120000", trustToml(dir))
+	writeFile(t, m.cfg, "[projects\n")
+	if err := os.Chtimes(m.cfg, at(20, 12, 0), at(20, 12, 0)); err != nil {
+		t.Fatal(err)
+	}
+	g := find(t, m.collect(), model.KindTrust, model.StatusUnknown, dir)
+	for _, e := range g.Evidence {
+		if strings.Contains(e.Source, "config.toml") && !strings.Contains(e.Source, ".bak") {
+			t.Errorf("evidence %+v comes from the config that did not parse", e)
 		}
 	}
-	return false
+	if g.LastSeen.IsZero() {
+		t.Error("the backup still shows when the folder was trusted")
+	}
+
+	// With a config that parses, its time is an observation again.
+	writeFile(t, m.cfg, trustToml())
+	if err := os.Chtimes(m.cfg, at(20, 12, 0), at(20, 12, 0)); err != nil {
+		t.Fatal(err)
+	}
+	g = find(t, m.collect(), model.KindTrust, model.StatusGone, dir)
+	if g.Removed.Before.IsZero() {
+		t.Errorf("a readable config without the folder dates the removal: %+v", g.Removed)
+	}
 }

@@ -27,7 +27,7 @@ func (c *collector) ruleUsage(rule string, base match.RuleBase, project string, 
 		// One tool call can match several keys of a rule, so take the largest count.
 		var n int32
 		for _, k := range keys {
-			use := f.Usage[k]
+			use := c.usage[p][k]
 			n = max(n, use.Count)
 			last = max(last, use.Last)
 		}

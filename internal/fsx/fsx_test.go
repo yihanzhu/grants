@@ -54,3 +54,32 @@ func TestBirthtime(t *testing.T) {
 		t.Fatal("missing file has no birthtime")
 	}
 }
+
+func TestMissing(t *testing.T) {
+	d := t.TempDir()
+	f := filepath.Join(d, "f")
+	os.WriteFile(f, nil, 0o600)
+	for p, want := range map[string]bool{
+		d: false, f: false,
+		filepath.Join(d, "nope"):  true,
+		filepath.Join(f, "child"): true, // a parent that is a file
+	} {
+		if got := Missing(p); got != want {
+			t.Errorf("Missing(%s) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func TestMissingIsFalseForPermissionError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores modes")
+	}
+	locked := filepath.Join(t.TempDir(), "locked")
+	os.Mkdir(locked, 0o700)
+	os.WriteFile(filepath.Join(locked, "f"), nil, 0o600)
+	os.Chmod(locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	if Missing(filepath.Join(locked, "f")) {
+		t.Error("a path behind a blocked folder is not known to be missing")
+	}
+}

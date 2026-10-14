@@ -70,6 +70,7 @@ type collector struct {
 	rep      model.Report
 	trusted  []trustEntry
 	cfgBad   bool            // config.toml could not be read or parsed
+	rulesBad bool            // a rules file or folder (other than a blocked project folder) could not be read
 	trustSet map[string]bool // every folder the config or a backup trusts
 	backups  []backupData
 	files    []ruleFile
@@ -95,6 +96,7 @@ func Collect(env model.Env, opt scan.Options) (rep model.Report) {
 	defer func() {
 		if r := recover(); r != nil {
 			c.rep.Notes = append(c.rep.Notes, model.Note{Level: "warn", Text: fmt.Sprintf("Codex scan stopped early: %v", r)})
+			c.rep.Read = nil // nothing is known to be read, so core infers no removal
 			rep = c.rep
 		}
 	}()
@@ -117,7 +119,9 @@ func (c *collector) readConfig() {
 			c.note("warn", "Could not read Codex config.toml: %v", err)
 			c.cfgBad = true
 		}
-	} else if c.trusted, err = parseTrusted(doc); err != nil {
+	} else if c.trusted, err = parseTrusted(doc); err == nil {
+		c.rep.Read = append(c.rep.Read, c.cfgPath)
+	} else {
 		c.cfgBad = true
 		// Name only the line: the parser error can quote part of the file, which may
 		// be an unquoted secret.
@@ -127,9 +131,6 @@ func (c *collector) readConfig() {
 		} else {
 			c.note("warn", "Could not parse Codex config.toml, so trusted folders are missing")
 		}
-	}
-	if c.cfgBad {
-		c.rep.Unread = append(c.rep.Unread, model.KeyCodexTrust(""))
 	}
 	for _, b := range configBackups(c.cfgPath) {
 		data, err := os.ReadFile(b.Path)
@@ -161,13 +162,12 @@ func (c *collector) readConfig() {
 func (c *collector) readRules() {
 	userDir := filepath.Join(c.env.CodexHome, "rules")
 	seen := map[string]bool{}
-	unread := false // a rules file or folder could not be read, so its rules are unknown
 	add := func(dir string, scope model.Scope, project string) (blocked bool) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			blocked = errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM)
 			if !errors.Is(err, fs.ErrNotExist) && (scope != model.ScopeProject || !blocked) {
-				unread = true // a blocked project folder is reported as such, not as a gap
+				c.rulesBad = true // a blocked project folder is reported as such, not as a gap
 			}
 			return blocked
 		}
@@ -178,7 +178,7 @@ func (c *collector) readRules() {
 			p := filepath.Join(dir, e.Name())
 			info, err := os.Stat(p)
 			if err != nil {
-				unread = unread || !errors.Is(err, fs.ErrNotExist)
+				c.rulesBad = c.rulesBad || !errors.Is(err, fs.ErrNotExist)
 				continue
 			}
 			if !info.Mode().IsRegular() || seen[p] {
@@ -188,7 +188,7 @@ func (c *collector) readRules() {
 			src, err := os.ReadFile(p)
 			if err != nil {
 				c.note("warn", "Could not read rules file %s: %v", p, err)
-				unread = true
+				c.rulesBad = true
 				continue
 			}
 			f := ruleFile{Path: p, Scope: scope, Project: project, Rules: ParseRules(src), Mod: info.ModTime()}
@@ -204,19 +204,20 @@ func (c *collector) readRules() {
 			c.blocked = append(c.blocked, t.Path)
 		}
 	}
-	if unread {
-		// Rule keys do not name their file, so every stored rule is unverified this run.
-		c.rep.Unread = append(c.rep.Unread, model.KeyCodexRule(""))
-	}
 	if n := len(c.blocked); n > 0 {
 		c.note("warn", "%s could not be read (macOS privacy). Give your terminal Full Disk Access to include their rules.", model.Plural(n, "trusted folder", "trusted folders"))
 	}
 	bad := 0
 	for _, f := range c.files {
+		fileBad := 0
 		for _, r := range f.Rules {
 			if r.Err != "" {
-				bad++
+				fileBad++
 			}
+		}
+		bad += fileBad
+		if fileBad == 0 {
+			c.rep.Read = append(c.rep.Read, f.Path) // a file with a broken statement is only partly read
 		}
 	}
 	if bad > 0 {
@@ -571,9 +572,15 @@ func (c *collector) goneRules(active []model.Grant) []model.Grant {
 		}
 		res := timeline.Date(c.snapshotObs(pattern, folder))
 		// A later session in the folder without the rule shows it was removed. Only a
-		// rule still present at its last sighting may sit in the unreadable folder.
-		if blocked && res.RemovedAt.Before.IsZero() {
-			g.Status, g.RevokeNote = model.StatusUnknown, "Folder not readable"
+		// rule still present at its last sighting may sit in the unreadable folder. A
+		// config or rules file that could not be read hides project rules in the same way.
+		if res.RemovedAt.Before.IsZero() {
+			switch {
+			case blocked:
+				g.Status, g.RevokeNote = model.StatusUnknown, "Folder not readable"
+			case c.cfgBad || c.rulesBad:
+				g.Status, g.RevokeNote = model.StatusUnknown, "File not readable"
+			}
 		}
 		if g.Status == model.StatusGone {
 			g.Removed = res.RemovedAt
@@ -706,7 +713,9 @@ func (c *collector) dateTrust(g *model.Grant, active bool) {
 	for _, b := range c.backups {
 		obs = append(obs, timeline.Obs{T: b.Time, Present: b.Trusted[path], Source: "config backup", File: b.Path})
 	}
-	if info, err := os.Stat(c.cfgPath); err == nil {
+	// The config's modification time says when the file as read now was written. It
+	// says nothing about a file that did not parse: its content is unknown.
+	if info, err := os.Stat(c.cfgPath); err == nil && !c.cfgBad {
 		obs = append(obs, timeline.Obs{T: info.ModTime(), Present: active, Source: "config last changed", File: c.cfgPath})
 	}
 	res := timeline.Date(obs)

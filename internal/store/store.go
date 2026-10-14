@@ -41,6 +41,7 @@ type Seen struct {
 	Kind    model.Kind  `json:"kind"`
 	Value   string      `json:"value"`
 	Project string      `json:"project,omitempty"`
+	File    string      `json:"file,omitempty"` // Location.File when the grant was last recorded
 	First   time.Time   `json:"first"`
 	Last    time.Time   `json:"last"`
 }
@@ -113,7 +114,7 @@ func (o *Observations) Record(now time.Time, active []model.Grant) {
 			s = &Seen{First: now}
 			o.Grants[g.Key] = s
 		}
-		s.Agent, s.Kind, s.Value, s.Project = g.Agent, g.Kind, g.Value, g.Project
+		s.Agent, s.Kind, s.Value, s.Project, s.File = g.Agent, g.Kind, g.Value, g.Project, g.Location.File
 		if now.Before(s.First) {
 			s.First = now
 		}

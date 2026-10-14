@@ -46,10 +46,13 @@ const (
 
 func (c *collector) ruleGrants(sf *settingsFile) {
 	v := &fileView{sf: sf}
-	v.doc, v.state = readFile(sf.Path)
+	var tooLarge bool
+	v.doc, v.state, tooLarge = readFileMax(sf.Path, maxReadSize)
 	if v.state == stateBlocked {
-		switch sf.Scope {
-		case model.ScopeUser, model.ScopeManaged:
+		switch {
+		case tooLarge:
+			c.note("warn", "%s is too large to read, so its rules are not listed.", sf.Path)
+		case sf.Scope == model.ScopeUser || sf.Scope == model.ScopeManaged:
 			c.note("warn", "Could not read %s, so its rules are not listed.", sf.Path)
 		default:
 			c.blocked[sf.Project] = true
@@ -60,6 +63,8 @@ func (c *collector) ruleGrants(sf *settingsFile) {
 		if err != nil {
 			v.invalid = true
 			c.note("warn", "Could not parse %s (not valid JSON), so its rules are not listed.", sf.Path)
+		} else {
+			c.rep.Read = append(c.rep.Read, sf.Path)
 		}
 		v.allow = dedupe(allow)
 		if fi, err := os.Stat(sf.Path); err == nil {
@@ -392,8 +397,11 @@ func specificity(rule string, base match.RuleBase) int {
 	case r.Tool == "WebFetch":
 		return 1
 	}
-	if dir, ok := strings.CutSuffix(spec, "/**"); ok {
-		return len(match.ResolvePath(dir, base))
+	// A folder rule ends in "**": "**" is the whole project, "//**" the whole disk, "~/**"
+	// the home folder. Resolve the folder the way match.ResolvePath does and rank it by
+	// the length of its path, so a deeper folder is narrower.
+	if spec == "**" || strings.HasSuffix(spec, "/**") {
+		return len(filepath.Clean(match.ResolvePath(strings.TrimSuffix(spec, "**"), base)))
 	}
 	return exactRank
 }

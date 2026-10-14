@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,15 +36,14 @@ func transcript(env model.Env, name string) string {
 func TestCollectUnreadableClaudeJSONGivesUnknown(t *testing.T) {
 	f := newFixture(t)
 	good := Collect(f.env, scan.Options{})
-	if len(good.Unread) != 0 {
-		t.Fatalf("unread = %v", good.Unread)
+	if !slices.Contains(good.Read, f.env.ClaudeJSON) {
+		t.Fatalf("Read = %v, want it to list the parsed %s", good.Read, f.env.ClaudeJSON)
 	}
 	writeFile(t, f.env.ClaudeJSON, `{"projects": {"`+f.proj+`": `) // half-written
 	rep := Collect(f.env, scan.Options{})
 
-	want := []string{"claude-code|trust|", "claude-code|rule|" + f.env.ClaudeJSON + "#"}
-	if strings.Join(rep.Unread, "\n") != strings.Join(want, "\n") {
-		t.Errorf("unread = %v, want %v", rep.Unread, want)
+	if slices.Contains(rep.Read, f.env.ClaudeJSON) {
+		t.Errorf("Read = %v lists a ~/.claude.json that could not be parsed", rep.Read)
 	}
 	for _, g := range rep.Grants {
 		inJSON := g.Kind == model.KindTrust || g.Scope == model.ScopeLegacy

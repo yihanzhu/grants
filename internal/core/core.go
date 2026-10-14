@@ -108,8 +108,9 @@ var adapters = []struct {
 	{model.Codex, "Codex", codex.Collect},
 }
 
-// collect runs both adapters at once. A crash in one becomes a note in its report,
-// and the whole agent counts as unread, so none of its earlier grants show as removed.
+// collect runs both adapters at once. A crash in one becomes a note in a report with
+// an empty Read list, so no earlier grant of that agent is inferred removed from a
+// file that is still there.
 func collect(env model.Env, opt scan.Options) []model.Report {
 	reports := make([]model.Report, len(adapters))
 	var wg sync.WaitGroup
@@ -120,10 +121,9 @@ func collect(env model.Env, opt scan.Options) []model.Report {
 			defer func() {
 				if r := recover(); r != nil {
 					reports[i] = model.Report{
-						Agent:  f.agent,
-						Found:  true,
-						Unread: []string{string(f.agent) + "|"},
-						Notes:  []model.Note{{Level: "warn", Text: fmt.Sprintf("%s scan stopped early: %v", f.name, r)}},
+						Agent: f.agent,
+						Found: true,
+						Notes: []model.Note{{Level: "warn", Text: fmt.Sprintf("%s scan stopped early: %v", f.name, r)}},
 					}
 				}
 			}()

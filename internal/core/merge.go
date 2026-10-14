@@ -3,8 +3,8 @@ package core
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/yihanzhu/grants/internal/fsx"
 	"github.com/yihanzhu/grants/internal/match"
@@ -44,9 +44,7 @@ func merge(env model.Env, reports []model.Report, obs *store.Observations) []mod
 	markBroadTrust(grants, fsx.Exists, listSubdirs)
 
 	var active []model.Grant
-	reported := map[string]bool{}
 	for _, g := range grants {
-		reported[g.Key] = true
 		if g.Status == model.StatusActive {
 			active = append(active, g)
 		}
@@ -67,13 +65,7 @@ func merge(env model.Env, reports []model.Report, obs *store.Observations) []mod
 			enrichGone(obs, g)
 		}
 	}
-	found := map[model.Agent]bool{}
-	unread := map[model.Agent][]string{}
-	for _, r := range reports {
-		found[r.Agent] = r.Found
-		unread[r.Agent] = append(unread[r.Agent], r.Unread...)
-	}
-	grants = append(grants, goneFromStore(env, obs, reported, found, unread)...)
+	grants = append(grants, goneFromStore(env, obs, reports, grants)...)
 
 	assignIDs(grants, hexOf)
 	sortGrants(grants)
@@ -142,10 +134,62 @@ func enrichGone(obs *store.Observations, g *model.Grant) {
 }
 
 // goneFromStore builds gone grants for grants that an earlier run saw and no adapter
-// reports now. An agent that is not found is skipped: its folder may just be missing
-// from this machine for the moment, which says nothing about its grants. A key under
-// an unread prefix is skipped too: the adapter could not read its source this run.
-func goneFromStore(env model.Env, obs *store.Observations, reported map[string]bool, found map[model.Agent]bool, unread map[model.Agent][]string) []model.Grant {
+// reports now. It infers removal only from evidence: the agent was found, and the
+// file that held the grant was read this run without the grant in it, or no longer
+// exists. A file that is unreadable, or that this run never looked at (for example a
+// project folder that was not discovered), proves nothing, so its grants stay out.
+// Grants stored without a file are never inferred gone. have is the grants the
+// adapters reported: a grant they already report in another form is not added twice.
+func goneFromStore(env model.Env, obs *store.Observations, reports []model.Report, have []model.Grant) []model.Grant {
+	found := map[model.Agent]bool{}
+	read := map[model.Agent]map[string]bool{}
+	for _, r := range reports {
+		found[r.Agent] = found[r.Agent] || r.Found
+		if read[r.Agent] == nil {
+			read[r.Agent] = map[string]bool{}
+		}
+		for _, p := range r.Read {
+			read[r.Agent][filepath.Clean(p)] = true
+		}
+	}
+	type value struct {
+		agent model.Agent
+		kind  model.Kind
+		value string
+	}
+	type placed struct {
+		value
+		file string
+	}
+	reportedKey := map[string]bool{}
+	activeIn := map[placed]bool{}
+	// Codex reports gone and unknown rules from session snapshots under the bare
+	// pattern key, with no file, while a project rule is stored under a key that
+	// names its file. Those two describe one rule, so keep only the adapter's. Other
+	// keys name their file or folder, so key equality is enough for them.
+	codexHistory := map[string][]string{} // value -> projects ("" = any)
+	for _, g := range have {
+		reportedKey[g.Key] = true
+		v := value{g.Agent, g.Kind, risk.Redact(g.Value)}
+		switch {
+		case g.Status == model.StatusActive:
+			activeIn[placed{v, g.Location.File}] = true
+		case g.Agent == model.Codex && g.Kind == model.KindRule && g.Location.File == "":
+			codexHistory[v.value] = append(codexHistory[v.value], g.Project)
+		}
+	}
+	coveredByCodexHistory := func(s *store.Seen) bool {
+		if s.Agent != model.Codex || s.Kind != model.KindRule {
+			return false
+		}
+		for _, p := range codexHistory[s.Value] {
+			if p == "" || p == s.Project {
+				return true
+			}
+		}
+		return false
+	}
+
 	keys := make([]string, 0, len(obs.Grants))
 	for k := range obs.Grants {
 		keys = append(keys, k)
@@ -155,7 +199,14 @@ func goneFromStore(env model.Env, obs *store.Observations, reported map[string]b
 	var out []model.Grant
 	for _, key := range keys {
 		s := obs.Grants[key]
-		if reported[key] || !found[s.Agent] || s.Last.IsZero() || hasPrefix(key, unread[s.Agent]) {
+		if reportedKey[key] || !found[s.Agent] || s.Last.IsZero() || s.File == "" {
+			continue
+		}
+		if !read[s.Agent][filepath.Clean(s.File)] && !fsx.Missing(s.File) {
+			continue
+		}
+		v := value{s.Agent, s.Kind, s.Value}
+		if activeIn[placed{v, s.File}] || coveredByCodexHistory(s) {
 			continue
 		}
 		g := model.Grant{
@@ -179,15 +230,6 @@ func goneFromStore(env model.Env, obs *store.Observations, reported map[string]b
 		out = append(out, g)
 	}
 	return out
-}
-
-func hasPrefix(key string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(key, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // idLen is the shortest id; it matches model.MakeID.

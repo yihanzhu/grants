@@ -365,10 +365,10 @@ func TestMergeGoneFromStore(t *testing.T) {
 	obs := &store.Observations{
 		Runs: []time.Time{day("2026-09-01"), day("2026-09-10")},
 		Grants: map[string]*store.Seen{
-			"claude-code|rule|f|Bash(git push:*)": {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(git push:*)", First: day("2026-09-01"), Last: day("2026-09-01")},
-			"claude-code|trust|/work/x":           {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", First: day("2026-09-01"), Last: day("2026-09-01")},
-			"codex|rule|[[\"ls\"]]":               {Agent: model.Codex, Kind: model.KindRule, Value: "ls", First: day("2026-09-01"), Last: day("2026-09-01")},
-			"codex|rule|[[\"zzz\"]]":              {Agent: model.Codex, Kind: model.KindRule, Value: "zzz", First: day("2026-09-01"), Last: day("2026-09-10")}, // still seen on the last run
+			"claude-code|rule|f|Bash(git push:*)": {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(git push:*)", File: "/nowhere/f", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"claude-code|trust|/work/x":           {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", File: "/nowhere/c.json", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"codex|rule|[[\"ls\"]]":               {Agent: model.Codex, Kind: model.KindRule, Value: "ls", File: "/nowhere/r", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"codex|rule|[[\"zzz\"]]":              {Agent: model.Codex, Kind: model.KindRule, Value: "zzz", File: "/nowhere/r", First: day("2026-09-01"), Last: day("2026-09-10")}, // still seen on the last run
 		},
 	}
 	e := env()
@@ -512,28 +512,6 @@ func TestStoreHoldsNoCredential(t *testing.T) {
 	}
 }
 
-func TestUnreadPrefixesAreNotReportedGone(t *testing.T) {
-	obs := &store.Observations{
-		Runs: []time.Time{day("2026-09-01"), day("2026-09-10")},
-		Grants: map[string]*store.Seen{
-			"claude-code|trust|/work/x":       {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", First: day("2026-09-01"), Last: day("2026-09-01")},
-			"claude-code|rule|f|Bash(ls:*)":   {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(ls:*)", First: day("2026-09-01"), Last: day("2026-09-01")},
-			"claude-code|rule|g.json#Bash(a)": {Agent: model.ClaudeCode, Kind: model.KindRule, Value: "Bash(a)", First: day("2026-09-01"), Last: day("2026-09-01")},
-		},
-	}
-	e := env()
-	e.Now = day("2026-09-10")
-	reports := []model.Report{{
-		Agent: model.ClaudeCode, Found: true,
-		Unread: []string{"claude-code|trust|", "claude-code|rule|g.json#"},
-	}}
-	out := merge(e, reports, obs)
-	// Only the rule from a file that was read counts as removed.
-	if len(out) != 1 || out[0].Value != "Bash(ls:*)" || out[0].Status != model.StatusGone {
-		t.Fatalf("grants = %+v, want only the rule from the readable file as gone", out)
-	}
-}
-
 func TestCollectRecoversAdapterPanic(t *testing.T) {
 	old := adapters
 	t.Cleanup(func() { adapters = old })
@@ -547,10 +525,17 @@ func TestCollectRecoversAdapterPanic(t *testing.T) {
 	if len(reports) != 1 || len(reports[0].Notes) != 1 || reports[0].Notes[0].Level != "warn" {
 		t.Fatalf("reports = %+v", reports)
 	}
+	if len(reports[0].Read) != 0 {
+		t.Errorf("Read = %v, want none after a crash", reports[0].Read)
+	}
+	existing := filepath.Join(t.TempDir(), "claude.json")
+	if err := os.WriteFile(existing, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	obs := &store.Observations{
 		Runs: []time.Time{day("2026-09-01")},
 		Grants: map[string]*store.Seen{
-			"claude-code|trust|/work/x": {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", First: day("2026-09-01"), Last: day("2026-09-01")},
+			"claude-code|trust|/work/x": {Agent: model.ClaudeCode, Kind: model.KindTrust, Value: "/work/x", File: existing, First: day("2026-09-01"), Last: day("2026-09-01")},
 		},
 	}
 	e := env()

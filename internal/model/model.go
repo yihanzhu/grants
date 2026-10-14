@@ -158,9 +158,10 @@ type Report struct {
 	Grants   []Grant    `json:"grants"`
 	Notes    []Note     `json:"notes,omitempty"`
 	Coverage []Coverage `json:"coverage,omitempty"`
-	// Unread lists key prefixes whose config could not be read on this run. Grants
-	// seen earlier under these prefixes must not be reported as removed.
-	Unread []string `json:"-"`
+	// Read lists every config file the adapter read and parsed this run (clean
+	// absolute paths). Core infers that a grant is gone only from a file listed here
+	// or from a file that no longer exists. A crashed adapter leaves it empty.
+	Read []string `json:"-"`
 }
 
 type Note struct {

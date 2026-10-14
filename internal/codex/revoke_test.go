@@ -2,10 +2,7 @@ package codex
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,28 +20,15 @@ func mustRead(t *testing.T, path string) []byte {
 	return b
 }
 
-// planRevoke reads the file that holds g and applies RevokeDoc to it, the way the
-// revoke package does, without writing anything.
-func planRevoke(env model.Env, g model.Grant) ([]edit.Change, error) {
-	if err := checkRevocable(g); err != nil {
-		return nil, err
-	}
-	file := g.Location.File
-	if file == "" && g.Kind == model.KindTrust {
-		file = filepath.Join(env.CodexHome, "config.toml")
-	}
-	if file == "" {
-		return nil, errors.New("codex: the grant has no file")
-	}
-	doc, err := os.ReadFile(file)
-	if err != nil {
-		return nil, fmt.Errorf("codex: read rules file: %w", err)
-	}
+// change builds the edit that applying RevokeDoc to file would make.
+func change(t *testing.T, env model.Env, g model.Grant, file string) edit.Change {
+	t.Helper()
+	doc := mustRead(t, file)
 	out, summary, err := RevokeDoc(env, g, doc)
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	return []edit.Change{{File: file, Before: doc, After: out, GrantID: g.ID, Summary: summary}}, nil
+	return edit.Change{File: file, Before: doc, After: out, GrantID: g.ID, Summary: summary}
 }
 
 func hasGrant(rep model.Report, kind model.Kind, status model.Status, value string) bool {
@@ -62,14 +46,8 @@ func TestRevokeRule(t *testing.T) {
 	g := find(t, rep, model.KindRule, model.StatusActive, "make ship")
 	before := mustRead(t, f.userRules)
 
-	changes, err := planRevoke(f.env, g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) != 1 {
-		t.Fatalf("changes = %d", len(changes))
-	}
-	c := changes[0]
+	c := change(t, f.env, g, g.Location.File)
+	changes := []edit.Change{c}
 	if c.File != f.userRules || c.GrantID != g.ID || !bytes.Equal(c.Before, before) || c.Summary == "" || strings.Contains(c.Summary, "\n") {
 		t.Errorf("change = %+v", c)
 	}
@@ -99,24 +77,18 @@ func TestRevokeRule(t *testing.T) {
 func TestRevokeRuleRemovesDuplicates(t *testing.T) {
 	f := newFixture(t)
 	g := find(t, Collect(f.env, scan.Options{}), model.KindRule, model.StatusActive, "npm test")
-	changes, err := planRevoke(f.env, g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(changes[0].After), "npm") {
-		t.Errorf("a duplicate statement was left: %s", changes[0].After)
+	c := change(t, f.env, g, g.Location.File)
+	if strings.Contains(string(c.After), "npm") {
+		t.Errorf("a duplicate statement was left: %s", c.After)
 	}
 }
 
 func TestRevokeProjectRule(t *testing.T) {
 	f := newFixture(t)
 	g := find(t, Collect(f.env, scan.Options{}), model.KindRule, model.StatusActive, "make deploy")
-	changes, err := planRevoke(f.env, g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changes[0].File != f.projRules || strings.Contains(string(changes[0].After), "deploy") || !strings.Contains(string(changes[0].After), "git") {
-		t.Errorf("change = %+v", changes[0])
+	c := change(t, f.env, g, g.Location.File)
+	if c.File != f.projRules || strings.Contains(string(c.After), "deploy") || !strings.Contains(string(c.After), "git") {
+		t.Errorf("change = %+v", c)
 	}
 }
 
@@ -127,11 +99,8 @@ func TestRevokeTrust(t *testing.T) {
 
 	// An existing folder is set to untrusted, not deleted.
 	g := find(t, rep, model.KindTrust, model.StatusActive, f.app)
-	changes, err := planRevoke(f.env, g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := changes[0]
+	c := change(t, f.env, g, g.Location.File)
+	changes := []edit.Change{c}
 	if c.File != f.configPath || !bytes.Equal(c.Before, before) || !strings.Contains(c.Summary, "untrusted") {
 		t.Errorf("change = %+v", c)
 	}
@@ -148,12 +117,9 @@ func TestRevokeTrust(t *testing.T) {
 
 	// A missing folder loses its entry.
 	g = find(t, rep, model.KindTrust, model.StatusActive, f.missing)
-	changes, err = planRevoke(f.env, g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(changes[0].After), f.missing) || !strings.Contains(string(changes[0].After), f.vault) {
-		t.Errorf("after =\n%s", changes[0].After)
+	c = change(t, f.env, g, g.Location.File)
+	if strings.Contains(string(c.After), f.missing) || !strings.Contains(string(c.After), f.vault) {
+		t.Errorf("after =\n%s", c.After)
 	}
 }
 
@@ -170,10 +136,6 @@ func TestRevokeRefusals(t *testing.T) {
 	otherAgent.Agent = model.ClaudeCode
 	missingRule := active
 	missingRule.Pattern = [][]string{{"no"}, {"such"}, {"rule"}}
-	noFile := active
-	noFile.Location.File = ""
-	badFile := active
-	badFile.Location.File = f.userRules + ".missing"
 	badKind := active
 	badKind.Kind = "mode"
 
@@ -187,15 +149,14 @@ func TestRevokeRefusals(t *testing.T) {
 		{"gone trust", goneTrust, "gone"},
 		{"other agent", otherAgent, "belongs to"},
 		{"rule not in file", missingRule, "no longer in"},
-		{"no file", noFile, "no file"},
-		{"unreadable file", badFile, "read rules file"},
 		{"unknown kind", badKind, "unknown grant kind"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changes, err := planRevoke(f.env, tt.g)
-			if err == nil || changes != nil {
-				t.Fatalf("changes=%v err=%v", changes, err)
+			doc := mustRead(t, f.userRules)
+			out, summary, err := RevokeDoc(f.env, tt.g, doc)
+			if err == nil || out != nil || summary != "" {
+				t.Fatalf("out=%q summary=%q err=%v", out, summary, err)
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)

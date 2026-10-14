@@ -127,3 +127,23 @@ func TestObsAndTimeline(t *testing.T) {
 		t.Fatalf("%+v", obs)
 	}
 }
+
+func TestRecordKeepsTheGrantsFile(t *testing.T) {
+	d := t.TempDir()
+	o, _ := Load(d)
+	a := g("k1", "ls")
+	a.Location.File = "/home/u/.codex/rules/default.rules"
+	o.Record(t0, []model.Grant{a})
+	a.Location.File = "/home/u/.codex/rules/other.rules" // the grant moved
+	o.Record(t0.Add(time.Hour), []model.Grant{a})
+	if err := o.Save(d); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Load(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := back.Grants["k1"].File; got != "/home/u/.codex/rules/other.rules" {
+		t.Errorf("File = %q", got)
+	}
+}

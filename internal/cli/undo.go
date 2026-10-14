@@ -35,7 +35,7 @@ func (a *app) cmdUndo(args []string) int {
 	case errors.Is(err, edit.ErrNothingToUndo):
 		return a.fail("nothing to undo. grants has not changed any file, or the last change is already undone.")
 	case errors.Is(err, edit.ErrChanged):
-		return a.fail("%s\nNothing was restored. Run grants undo --force to overwrite the changes anyway.", trimSentinel(err, edit.ErrChanged))
+		return a.fail("%s\nNothing was restored. Run grants undo --force to restore anyway; it keeps a copy of the current file first.", trimSentinel(err, edit.ErrChanged))
 	case err != nil:
 		return a.fail("%v", err)
 	}
@@ -47,6 +47,9 @@ func (a *app) cmdUndo(args []string) int {
 			if s != "" {
 				fmt.Fprintf(a.stdout, "    %s\n", a.st.dim("undone: "+tildeText(s, env.Home)))
 			}
+		}
+		if f.Saved != "" {
+			fmt.Fprintf(a.stdout, "    Your newer version was saved to %s\n", tilde(f.Saved, env.Home))
 		}
 	}
 	return exitOK

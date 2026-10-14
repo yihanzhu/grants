@@ -53,8 +53,10 @@ func (f *unusedFlag) Set(s string) error {
 	return nil
 }
 
-// joinUnusedDays turns "--unused 30" into "--unused=30". An id is never shorter than 4
-// characters, so a number of 1 to 3 digits after --unused is a window, not an id.
+// joinUnusedDays turns "--unused 30" into "--unused=30". A number of 1 to 5 digits
+// right after --unused is a window (36500 days is the most). An id is at least 4
+// characters, so a 4 or 5 digit id typed there must be written without --unused in
+// front, or as --unused=N followed by the id.
 func joinUnusedDays(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
@@ -70,7 +72,7 @@ func joinUnusedDays(args []string) []string {
 }
 
 func isShortNumber(s string) bool {
-	if len(s) < 1 || len(s) > 3 {
+	if len(s) < 1 || len(s) > 5 {
 		return false
 	}
 	for _, r := range s {
@@ -149,7 +151,7 @@ func (a *app) cmdRevoke(args []string) int {
 	}
 	if len(items) == 0 {
 		for _, s := range skipped {
-			fmt.Fprintf(a.stderr, "grants: skipped %v\n", s.Err)
+			fmt.Fprintf(a.stderr, "grants: skipped %s\n", oneLine(s.Err.Error()))
 		}
 		return a.fail("nothing can be revoked")
 	}

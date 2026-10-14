@@ -121,8 +121,8 @@ func TestSelectorsSkipManagedAndInactive(t *testing.T) {
 }
 
 func TestJoinUnusedDays(t *testing.T) {
-	got := joinUnusedDays([]string{"--unused", "30", "abcd123", "--unused", "abcd123", "-unused", "7", "--dead", "--unused", "1234"})
-	want := "--unused=30 abcd123 --unused abcd123 --unused=7 --dead --unused 1234"
+	got := joinUnusedDays([]string{"--unused", "30", "abcd123", "--unused", "abcd123", "-unused", "7", "--dead", "--unused", "1234", "--unused", "36500", "--unused", "123456"})
+	want := "--unused=30 abcd123 --unused abcd123 --unused=7 --dead --unused=1234 --unused=36500 --unused 123456"
 	if strings.Join(got, " ") != want {
 		t.Errorf("got %q, want %q", strings.Join(got, " "), want)
 	}
@@ -175,7 +175,7 @@ func TestSummaryCleanUpSingularAndWindow(t *testing.T) {
 	}, Reports: []model.Report{{Agent: model.Codex, Found: true}}}
 	var sb strings.Builder
 	renderSummary(&sb, res, style{}, 100)
-	mustContain(t, sb.String(), "1 grant points to a deleted path: grants revoke --dead", "1 grant not used in 30 days: grants revoke --unused 30")
+	mustContain(t, sb.String(), "1 grant points to a deleted path: grants revoke --dead", "1 grant not used in 30 days: grants revoke --unused=30")
 }
 
 func TestSummarySkipsManagedInCleanUp(t *testing.T) {

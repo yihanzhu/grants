@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"strings"
 )
@@ -81,16 +82,27 @@ stops and tells you which. --force restores it anyway.
 
 Reads the agents' files and history, then shows what was read and how long it took.
 ` + globalFlags,
-	"version": "Usage: grants version\n",
+	"version": "Usage: grants version [flags]\n" + globalFlags,
 }
 
 func (a *app) cmdHelp(args []string) int {
-	if len(args) > 0 {
-		if u, ok := usages[args[0]]; ok {
+	var g globals
+	fs := flag.NewFlagSet("help", flag.ContinueOnError)
+	g.register(fs)
+	rest, code, done := a.parse("help", overview, fs, &g, args)
+	if done {
+		return code
+	}
+	if len(rest) > 1 {
+		fmt.Fprintf(a.stderr, "grants help: unexpected argument %q\nRun grants help to see the commands.\n", rest[1])
+		return exitUsage
+	}
+	if len(rest) == 1 {
+		if u, ok := usages[rest[0]]; ok {
 			fmt.Fprint(a.stdout, u)
 			return exitOK
 		}
-		fmt.Fprintf(a.stderr, "grants: no help for %q\n", args[0])
+		fmt.Fprintf(a.stderr, "grants: no help for %q\n", rest[0])
 		return exitUsage
 	}
 	var sb strings.Builder

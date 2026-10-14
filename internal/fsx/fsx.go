@@ -20,6 +20,13 @@ func Exists(path string) bool {
 	return isDenied(err)
 }
 
+// Missing reports whether path certainly does not exist: Lstat says not-exist, or a
+// parent is not a folder. A permission error is not "missing": the path may be there.
+func Missing(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
 func isDenied(err error) bool {
 	return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
 }

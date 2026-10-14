@@ -30,7 +30,8 @@ type collector struct {
 	cjState fileState
 
 	facts   map[string]*TranscriptFacts
-	paths   []string // transcripts that were read, sorted
+	usage   map[string]map[match.Key]Use // per transcript, from its calls after copies are removed
+	paths   []string                     // transcripts that were read, sorted
 	oldest  time.Time
 	desktop []session
 	prompts []session
@@ -70,27 +71,25 @@ func (c *collector) note(level, format string, args ...any) {
 
 func (c *collector) readClaudeJSON() {
 	c.cj = claudeJSON{Projects: map[string]projectInfo{}}
-	c.cjDoc, c.cjState = readFile(c.env.ClaudeJSON)
+	var tooLarge bool
+	c.cjDoc, c.cjState, tooLarge = readFileMax(c.env.ClaudeJSON, maxClaudeJSONSize)
 	switch c.cjState {
 	case stateBlocked:
-		c.note("warn", "Could not read %s, so trust and legacy rules are missing.", c.env.ClaudeJSON)
-		c.unreadClaudeJSON()
+		if tooLarge {
+			c.note("warn", "%s is too large to read, so trust and legacy rules are missing.", c.env.ClaudeJSON)
+		} else {
+			c.note("warn", "Could not read %s, so trust and legacy rules are missing.", c.env.ClaudeJSON)
+		}
 	case stateOK:
 		cj, err := parseClaudeJSON(c.cjDoc)
 		if err != nil {
 			c.note("warn", "Could not parse %s, so trust and legacy rules are missing.", c.env.ClaudeJSON)
 			c.cjState = stateBlocked
-			c.unreadClaudeJSON()
 			return
 		}
 		c.cj = cj
+		c.rep.Read = append(c.rep.Read, filepath.Clean(c.env.ClaudeJSON))
 	}
-}
-
-// unreadClaudeJSON tells the merge step that grants held in ~/.claude.json were not
-// seen this run, so earlier ones must not count as removed.
-func (c *collector) unreadClaudeJSON() {
-	c.rep.Unread = append(c.rep.Unread, "claude-code|trust|", "claude-code|rule|"+c.env.ClaudeJSON+"#")
 }
 
 func (c *collector) scanTranscripts() {
@@ -133,38 +132,46 @@ func (c *collector) scanTranscripts() {
 		}
 	}
 	sort.Strings(c.paths)
-	c.dedupeCalls()
+	c.buildUsage()
 	c.oldest = from
 	if len(got) > 0 {
 		c.rep.Coverage = append(c.rep.Coverage, model.Coverage{Source: "Claude Code transcripts", Files: len(got), From: from, To: to})
 	}
 }
 
-// dedupeCalls rebuilds the usage of every transcript so that a tool call counts once.
-// A resumed or forked session copies the calls of its parent into a new transcript.
-// The oldest transcript owns a call, so the original session keeps it.
-func (c *collector) dedupeCalls() {
+// buildUsage counts the tool calls of every transcript so that a call counts once. A
+// resumed or forked session copies the calls of its parent into a new transcript. The
+// oldest transcript owns a call, so the original session keeps it. The per-file counts
+// are never cached: they would include the copies.
+func (c *collector) buildUsage() {
 	order := slices.Clone(c.paths)
 	sort.SliceStable(order, func(i, j int) bool {
 		return c.facts[order[i]].Start.Before(c.facts[order[j]].Start)
 	})
 	seen := map[uint64]struct{}{}
+	c.usage = make(map[string]map[match.Key]Use, len(order))
 	for _, p := range order {
-		f := c.facts[p]
-		f.Usage = map[match.Key]Use{}
-		for _, call := range f.Calls {
-			if call.ID != 0 {
-				if _, dup := seen[call.ID]; dup {
-					continue
-				}
-				seen[call.ID] = struct{}{}
+		u := map[match.Key]Use{}
+		countCalls(u, c.facts[p].Calls, seen)
+		c.usage[p] = u
+	}
+}
+
+// countCalls adds the keys of calls to usage. A call whose ID is in seen is skipped, and
+// a call with an ID is added to seen. seen may be nil to count every call.
+func countCalls(usage map[match.Key]Use, calls []ToolCall, seen map[uint64]struct{}) {
+	for _, call := range calls {
+		if call.ID != 0 && seen != nil {
+			if _, dup := seen[call.ID]; dup {
+				continue
 			}
-			for _, k := range call.Keys {
-				u := f.Usage[k]
-				u.Count++
-				u.Last = max(u.Last, call.Last)
-				f.Usage[k] = u
-			}
+			seen[call.ID] = struct{}{}
+		}
+		for _, k := range call.Keys {
+			u := usage[k]
+			u.Count++
+			u.Last = max(u.Last, call.Last)
+			usage[k] = u
 		}
 	}
 }

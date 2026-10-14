@@ -11,6 +11,11 @@ import (
 // maxUnwrap limits how deep `bash -c '...'` scripts are unwrapped.
 const maxUnwrap = 3
 
+// maxSubst limits how deep $( ) substitutions are listed as commands of their own.
+// Deeper ones stay inside their word. The cap and the closing-paren check keep
+// split near-linear: each level scans its text once, and only a few levels exist.
+const maxSubst = 3
+
 var shells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true, "fish": true}
 
 // Commands splits a shell command line into simple commands, each as unquoted tokens.
@@ -66,7 +71,10 @@ func shellScript(cmd []string) (string, bool) {
 }
 
 // split tokenizes line and groups tokens into simple commands.
-func split(line string) [][]string {
+func split(line string) [][]string { return splitDepth(line, 0) }
+
+// splitDepth is split for text that sits depth levels deep in $( ) substitutions.
+func splitDepth(line string, depth int) [][]string {
 	var (
 		cmds     [][]string
 		cur      []string
@@ -133,8 +141,10 @@ func split(line string) [][]string {
 			}
 		case c == '$' && i+1 < len(rs) && rs[i+1] == '(': // $(cmd) stays in the word; its commands are listed too
 			end := closeParen(rs, i+1)
-			if i+2 < len(rs) && rs[i+2] != '(' { // not $(( arithmetic ))
-				cmds = append(cmds, split(string(rs[i+2:min(end, len(rs))]))...)
+			// Without a closing paren the text is not a substitution, and looking inside
+			// it would rescan the rest of the line at every nested "$(".
+			if end < len(rs) && depth < maxSubst && rs[i+2] != '(' { // not $(( arithmetic ))
+				cmds = append(cmds, splitDepth(string(rs[i+2:end]), depth+1)...)
 			}
 			tok.WriteString(string(rs[i:min(end+1, len(rs))]))
 			inTok = true

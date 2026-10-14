@@ -103,7 +103,7 @@ The full design is in [docs/design.md](docs/design.md).
 - grants never opens a network connection.
 - It is read-only. Only `revoke` and `undo` write, and `revoke` asks first (or use `--dry-run` to only look).
 - It edits only the bytes that hold the grant, then parses the file again to check the result.
-- It copies each file to its state folder before writing. `grants undo` restores it, and refuses if the file changed since (unless you use `--force`).
+- It copies each file to its state folder before writing. `grants undo` restores it, and refuses if the file changed since. `--force` restores it anyway and keeps a copy of your newer file.
 - It does not store conversation text. The saved state holds hashed usage keys, your rules, and short excerpts (at most 160 characters) of approved commands and agent justifications, with credentials redacted.
 - It never edits organization-managed settings.
 - State lives in `~/.local/state/grants` (override with `GRANTS_STATE_DIR`).

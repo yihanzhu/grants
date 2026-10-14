@@ -93,11 +93,33 @@ func newBatchDir(stateDir string, now time.Time, taken map[string]bool) (string,
 	return "", "", errors.New("edit: no free batch id")
 }
 
-// rollback puts the original content back into the files written so far.
+// restoreIf puts data back into path, but only while the file still holds expect, the
+// content grants itself wrote. A file that an agent changed since is left alone, so
+// its newer content is never lost. existed false means the file was missing before:
+// it is removed instead.
+func restoreIf(path string, data []byte, existed bool, expect []byte) error {
+	check := func() error {
+		cur, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(cur, expect) {
+			return fmt.Errorf("%s was changed after grants wrote it, so it was left as is", path)
+		}
+		return nil
+	}
+	if existed {
+		return writeAtomic(path, data, check)
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
+// rollback puts the original content back into the files written so far. It skips
+// a file that no longer holds what grants wrote and reports it.
 func rollback(changes []Change, originals [][]byte, written int) error {
 	var errs []error
 	for i := 0; i < written; i++ {
-		if err := WriteFileAtomic(changes[i].File, originals[i]); err != nil {
+		if err := restoreIf(changes[i].File, originals[i], true, changes[i].After); err != nil {
 			errs = append(errs, fmt.Errorf("restore %s: %w", changes[i].File, err))
 		}
 	}
@@ -303,13 +325,11 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 	fail := func(written int, cause error) (Batch, error) {
 		var errs []error
 		for i := 0; i < written; i++ {
-			var err error
-			if existed[i] {
-				err = WriteFileAtomic(batch.Files[i].File, current[i])
-			} else {
-				err = os.Remove(batch.Files[i].File)
+			if untouched[i] {
+				continue // never written
 			}
-			if err != nil {
+			// Put back what the file held before this undo, unless something wrote it since.
+			if err := restoreIf(batch.Files[i].File, current[i], existed[i], backups[i]); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -322,16 +342,28 @@ func Undo(stateDir string, now time.Time, force bool) (Batch, error) {
 		if untouched[i] {
 			continue
 		}
-		var check func() error
-		if !force {
-			// Check again right before the rename, in case an agent wrote meanwhile.
-			check = func() error {
-				cur, err := os.ReadFile(f.File)
-				if err != nil || hashHex(cur) != f.AfterHash {
-					return fmt.Errorf("%w: %s was edited after grants changed it (use force to restore anyway)", ErrChanged, f.File)
-				}
-				return nil
+		// Check again right before the rename, in case an agent wrote meanwhile. A
+		// normal undo wants the file grants wrote; a forced one wants the file it just
+		// read (or no file, when there was none), so the copy it saved stays complete.
+		check := func() error {
+			cur, err := os.ReadFile(f.File)
+			var ok bool
+			switch { // ok: the file is what this undo expects
+			case force && !existed[i]:
+				ok = errors.Is(err, fs.ErrNotExist)
+			case force:
+				ok = err == nil && bytes.Equal(cur, current[i])
+			default:
+				ok = err == nil && hashHex(cur) == f.AfterHash
 			}
+			switch {
+			case ok:
+			case force:
+				return fmt.Errorf("%w: %s was edited while grants was restoring it (nothing was overwritten)", ErrChanged, f.File)
+			default:
+				return fmt.Errorf("%w: %s was edited after grants changed it (use force to restore anyway)", ErrChanged, f.File)
+			}
+			return nil
 		}
 		err := writeAtomic(f.File, backups[i], check)
 		if errors.Is(err, ErrChanged) {

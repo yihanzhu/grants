@@ -5,7 +5,7 @@ grants is a local ledger of the permissions you have given AI coding agents. It 
 ## Principles
 
 - **Local only.** grants never opens a network connection.
-- **Read-only by default.** Only `revoke` and `undo` write. `revoke` shows a plan and asks first. `undo` restores only files that have not changed since the revoke, unless you pass `--force`.
+- **Read-only by default.** Only `revoke` and `undo` write. `revoke` shows a plan and asks first. `undo` restores only files that have not changed since the revoke. `--force` restores them anyway and first saves a copy of your newer file.
 - **Change only what you asked for.** Edits touch the bytes that hold the grant, are checked by parsing the file again, and are backed up first. `grants undo` restores the backup.
 - **No copy of your history.** grants reads session transcripts to date grants and measure use. Its cache keeps hashed usage keys and short, redacted excerpts (approved commands up to 120 characters, Codex justifications up to 160), never conversation text.
 - **Show what can't be known.** When a date is a range or an estimate, the output says so.
@@ -71,14 +71,14 @@ Flags:
 
 Grants in the same file are planned together, so several grants in one file become one edit. A selector (`--dead`, `--one-off`, `--unused [days]`) plans each grant on its own, so one stale grant does not block the rest. A selector picks every active grant that grants can edit and that has its flag. Selectors combine with each other and with ids, and a grant that matches more than one is revoked once. The plan and the confirmation are the same for every selector. Managed (organization) settings are never edited. Codex trust is set to `untrusted` instead of deleted because the Codex desktop app trusts any folder with no decision again on its next thread.
 
-Before writing, grants copies each file to `<state>/backups/<batch>/` and checks the file still has the content it planned against. `grants undo` restores the latest batch if the files have not changed since.
+Before writing, grants copies each file to `<state>/backups/<batch>/` and checks the file still has the content it planned against. `grants undo` restores the latest batch if the files have not changed since. A rollback after a failed write puts back only files that still hold what grants wrote; a file an agent changed in the meantime is left as it is and named in the error.
 
 ## Summary
 
 `grants` with no command prints a headline, a table, then two lists:
 
 - **Needs a look**: active grants that are high risk or hold a credential (`secret`). A grant flagged `dead-path` or `one-off` that grants can revoke moves to Clean up, unless it holds a credential. Credentials always stay in view.
-- **Clean up**: the bulk commands. Each count is what the command next to it would select, so a grant with two flags is in two counts: `dead-path` (`grants revoke --dead`), `one-off` (`grants revoke --one-off`) and `unused` (`grants revoke --unused`, with the number of days when it is not 90). The list shows the backup, preview and undo hint once.
+- **Clean up**: the bulk commands. Each count is what the command next to it would select, so a grant with two flags is in two counts: `dead-path` (`grants revoke --dead`), `one-off` (`grants revoke --one-off`) and `unused` (`grants revoke --unused`, or `grants revoke --unused=N` when the window is not 90 days). The list shows the backup, preview and undo hint once.
 
 ## Display
 
@@ -92,7 +92,7 @@ Before writing, grants copies each file to `<state>/backups/<batch>/` and checks
 State lives in `$GRANTS_STATE_DIR`, default `~/.local/state/grants`:
 
 - `cache-*.gob`: per-file history results, keyed by path, size, modification time, inode and a hash of the first 4 KB.
-- `seen.json`: which grants each run saw, and when. It keeps each grant's rule text or folder with credentials redacted, never a full command history. A grant seen before and absent now is shown as `gone`, with a removal window. A grant with no adapter date is dated from the previous run to now, with the source "first seen by grants".
+- `seen.json`: which grants each run saw, and when. It keeps each grant's rule text or folder with credentials redacted, never a full command history. It also keeps the file that held each grant. A grant seen before and absent now is shown as `gone`, with a removal window, only when that file was read and parsed on this run without the grant, or the file no longer exists. A file that could not be read, or a folder that this run never looked at, says nothing, so its grants are not shown as removed. Adapters report the files they read; grants stored without a file are never inferred gone. A grant with no adapter date is dated from the previous run to now, with the source "first seen by grants".
 - `journal.jsonl`, `backups/`: every revoke and undo.
 
 ## Roadmap

@@ -18,7 +18,7 @@ import (
 // version whenever the facts or the way they are computed change.
 const (
 	transcriptCacheName    = "claude-transcripts"
-	transcriptCacheVersion = 2
+	transcriptCacheVersion = 3
 )
 
 // Use counts how often history matched one usage key.
@@ -36,8 +36,7 @@ type TranscriptFacts struct {
 	Snapshots   []SettingsSnapshot // allow lists seen in Edit/Write results on settings files
 	FileHistory []FileHistoryRef   // file-history backups of settings files
 	Decisions   []Decision         // "don't ask again" answers
-	Usage       map[match.Key]Use  // this file alone; Collect rebuilds it from Calls
-	Calls       []ToolCall         // every counted tool call, so copies of a session count once
+	Calls       []ToolCall         // every counted tool call; Collect counts each call once, even when a session was copied
 }
 
 // ToolCall is one counted tool call. A resumed or forked session copies the calls of
@@ -116,7 +115,7 @@ type extractor struct {
 func extractTranscript(path, projectsRoot, historyRoot string) (TranscriptFacts, error) {
 	sess := sessionFolder(path, projectsRoot)
 	x := &extractor{
-		f:        &TranscriptFacts{Usage: map[match.Key]Use{}},
+		f:        &TranscriptFacts{},
 		fhDir:    filepath.Join(historyRoot, sess),
 		seenTool: map[string]struct{}{},
 		cur:      map[string]recentUse{},
@@ -262,7 +261,7 @@ func (x *extractor) recall(id string) (recentUse, bool) {
 	return r, ok
 }
 
-// count adds one use to every distinct key of a tool call and records the call.
+// count records a tool call with its distinct keys.
 func (x *extractor) count(id string, keys []match.Key, t time.Time) {
 	clear(x.callKeys)
 	last := int64(0)
@@ -281,12 +280,6 @@ func (x *extractor) count(id string, keys []match.Key, t time.Time) {
 		}
 		x.callKeys[k] = struct{}{}
 		call.Keys = append(call.Keys, k)
-		u := x.f.Usage[k]
-		u.Count++
-		if last > u.Last {
-			u.Last = last
-		}
-		x.f.Usage[k] = u
 	}
 	x.f.Calls = append(x.f.Calls, call)
 }

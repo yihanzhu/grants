@@ -47,33 +47,6 @@ func lookRank(g model.Grant) int {
 	return -1
 }
 
-// A grant that grants revoke can remove in bulk is dead, one-off or unused. needsLook
-// treats a grant as the first of these that fits, in this order. The Clean up counts
-// in the summary do not: each one counts by its own flag, like the revoke selector.
-type cleanup int
-
-const (
-	cleanNone cleanup = iota
-	cleanDead
-	cleanOneOff
-	cleanUnused
-)
-
-// cleanupOf says which clean-up list an active, revocable grant belongs to.
-func cleanupOf(g model.Grant) cleanup {
-	switch {
-	case g.Status != model.StatusActive || !g.Revocable:
-		return cleanNone
-	case g.HasFlag(model.FlagDeadPath):
-		return cleanDead
-	case g.HasFlag(model.FlagOneOff):
-		return cleanOneOff
-	case g.HasFlag(model.FlagUnused):
-		return cleanUnused
-	}
-	return cleanNone
-}
-
 // The selectors of grants revoke. A grant can match several; revoke takes it once.
 func isDead(g model.Grant) bool {
 	return g.Status == model.StatusActive && g.Revocable && g.HasFlag(model.FlagDeadPath)
@@ -85,8 +58,8 @@ func isUnused(g model.Grant) bool {
 	return g.Status == model.StatusActive && g.Revocable && g.HasFlag(model.FlagUnused)
 }
 
-// needsLook picks active grants that are high risk or hold a secret. A grant that points
-// to a deleted path or looks like a one-off is a clean-up job instead, unless it holds a
+// needsLook picks active grants that are high risk or hold a secret. A grant that grants
+// revoke can remove as dead or one-off is a clean-up job instead, unless it holds a
 // secret: a credential in a rule is worth seeing by name. Most worrying first, then
 // newest first.
 func needsLook(grants []model.Grant) []model.Grant {
@@ -95,7 +68,7 @@ func needsLook(grants []model.Grant) []model.Grant {
 		if g.Status != model.StatusActive || lookRank(g) < 0 {
 			continue
 		}
-		if c := cleanupOf(g); (c == cleanDead || c == cleanOneOff) && !g.HasFlag(model.FlagSecret) {
+		if (isDead(g) || isOneOff(g)) && !g.HasFlag(model.FlagSecret) {
 			continue
 		}
 		out = append(out, g)
@@ -309,7 +282,7 @@ func renderSummary(w io.Writer, res core.Result, st style, termW int) {
 		if n := nUnused; n > 0 {
 			cmd := "grants revoke --unused"
 			if res.Env.UnusedAfter != core.DefaultUnusedAfter {
-				cmd += " " + strconv.Itoa(int(res.Env.UnusedAfter/(24*time.Hour)))
+				cmd += "=" + strconv.Itoa(int(res.Env.UnusedAfter/(24*time.Hour))) // the form revoke reads for any number
 			}
 			fmt.Fprintf(w, "  %s not used in %s: %s\n", plural(n, "grant", "grants"), daysText(res.Env.UnusedAfter), st.bold(cmd))
 		}
